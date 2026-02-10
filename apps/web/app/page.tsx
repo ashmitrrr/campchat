@@ -59,8 +59,9 @@ export default function Home() {
   useEffect(() => {
     if (!isReadyToChat || !user) return;
 
+    // Smart Parser: Handles international domains (e.g., utoronto.ca -> UTORONTO)
     const domain = user.email.split("@")[1];
-    const cleanDomain = domain.replace(/student\.|my\.|mail\.|\.edu\.au|\.edu/g, "");
+    const cleanDomain = domain.replace(/student\.|my\.|mail\.|\.edu\.au|\.edu|\.ca|\.ac\.uk|\.ac\.in/g, "");
     const uni = cleanDomain.toUpperCase().split(".")[0];
     const filterValue = (document.getElementById("uni-filter") as HTMLSelectElement)?.value || "Any";
     
@@ -138,21 +139,41 @@ export default function Home() {
 
   // ---- ACTIONS ----
   
-  // 📧 HANDLE LOGIN (Real Magic Link)
+  // 📧 HANDLE LOGIN (Real Magic Link - GLOBAL EDITION)
   const handleLogin = async () => {
     setLoading(true);
     setAuthMessage("");
 
-    // 1. Validate Uni Email
-    if (!emailInput.endsWith(".edu.au") && !emailInput.endsWith(".edu")) {
-       alert("Please use a valid university email (.edu.au)");
+    const email = emailInput.toLowerCase().trim();
+
+    // 1. The "No Gmail Allowed" Rule 🚫
+    // Blocks common public providers but allows ANY other domain (e.g. ubc.ca, ox.ac.uk)
+    const publicDomains = ["gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "icloud.com", "proton.me"];
+    
+    if (!email.includes("@")) {
+        alert("Please enter a valid email address.");
+        setLoading(false);
+        return;
+    }
+
+    const domain = email.split("@")[1];
+
+    if (publicDomains.includes(domain)) {
+        alert("⚠️ Students only! Please use your university email (e.g., .edu, .ca, .ac.uk).");
+        setLoading(false);
+        return;
+    }
+
+    // 2. Basic Format Check
+    if (!email.includes(".")) {
+       alert("Please enter a valid email address.");
        setLoading(false);
        return;
     }
 
-    // 2. Send Supabase Magic Link
+    // 3. Send Supabase Magic Link
     const { error } = await supabase.auth.signInWithOtp({
-      email: emailInput,
+      email: email,
       options: {
         emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
       },
@@ -161,7 +182,7 @@ export default function Home() {
     if (error) {
       alert(error.message);
     } else {
-      setAuthMessage(`Magic link sent to ${emailInput}! Check your inbox (and spam). 📩`);
+      setAuthMessage(`Magic link sent to ${email}! Check your inbox (and spam). 📩`);
     }
     setLoading(false);
   };

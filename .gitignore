@@ -1,0 +1,26 @@
+# --- Secrets (NEVER UPLOAD THESE) ---
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# --- Heavy Dependencies ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Build Artifacts (Next.js & Node) ---
+.next/
+dist/
+build/
+out/
+
+# --- OS Junk ---
+.DS_Store
+Thumbs.db
+
+# --- Vercel ---
+.vercel

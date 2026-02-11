@@ -15,6 +15,8 @@ export default function Home() {
   
   // Login Flow State
   const [emailInput, setEmailInput] = useState("");
+  const [otpInput, setOtpInput] = useState(""); // 🆕 State for OTP Code
+  const [showOtpInput, setShowOtpInput] = useState(false); // 🆕 Switch between Email/Code view
   const [loading, setLoading] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
 
@@ -31,7 +33,7 @@ export default function Home() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 1. CHECK SESSION (Handles the return from Email Link)
+  // 1. CHECK SESSION
   useEffect(() => {
     const checkUser = async () => {
       const { data } = await supabase.auth.getSession();
@@ -139,8 +141,8 @@ export default function Home() {
 
   // ---- ACTIONS ----
   
-  // 📧 HANDLE LOGIN (Real Magic Link - GLOBAL EDITION)
-  const handleLogin = async () => {
+  // 📨 STEP 1: SEND CODE (Replaces Magic Link)
+  const handleSendCode = async () => {
     setLoading(true);
     setAuthMessage("");
 
@@ -170,21 +172,36 @@ export default function Home() {
        return;
     }
 
-    // 3. Send Supabase Magic Link
+    // 3. Send Supabase OTP (No Redirect URL needed for code)
     const { error } = await supabase.auth.signInWithOtp({
       email: email,
-      options: {
-        // 🟢 THE FIX: Hardcoded URL prevents the "www" vs "non-www" redirect loop
-        emailRedirectTo: 'https://campchat.app',
-      },
     });
 
     if (error) {
       alert(error.message);
     } else {
-      setAuthMessage(`Magic link sent to ${email}! Check your inbox (and spam). 📩`);
+      setShowOtpInput(true); // Switch UI to show code input
+      setAuthMessage(`Code sent to ${email}! Check your inbox (and spam). 📩`);
     }
     setLoading(false);
+  };
+
+  // 🔐 STEP 2: VERIFY CODE
+  const handleVerifyCode = async () => {
+    setLoading(true);
+    
+    const { error } = await supabase.auth.verifyOtp({
+        email: emailInput,
+        token: otpInput,
+        type: 'email',
+    });
+
+    if (error) {
+        alert(error.message);
+        setLoading(false);
+    } else {
+        // Success! The useEffect listener will catch the session update and log the user in.
+    }
   };
 
   const handleGoGlobal = () => {
@@ -236,7 +253,7 @@ export default function Home() {
     setInput("");
   };
 
-  // ---- RENDER: 1. LOGIN SCREEN (Real Auth) ----
+  // ---- RENDER: 1. LOGIN SCREEN (OTP Auth) ----
   if (!user) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
@@ -247,38 +264,49 @@ export default function Home() {
             <h1 className="text-4xl font-extrabold text-white mb-2 tracking-tight">CampChat</h1>
             <p className="text-zinc-400 mb-8">The exclusive social network for uni students.</p>
             
-            {!loading && !authMessage ? (
-              <div className="space-y-4">
-                 <input 
-                    type="email" 
-                    placeholder="student@uni.edu.au"
-                    className="w-full rounded-xl bg-black/40 border border-white/10 p-4 text-white placeholder-zinc-500 focus:border-emerald-500 outline-none transition-colors"
-                    value={emailInput}
-                    onChange={(e) => setEmailInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-                 />
-                 <button 
-                    onClick={handleLogin} 
-                    disabled={!emailInput}
-                    className="w-full rounded-xl bg-emerald-500 py-3 font-bold text-black hover:bg-emerald-400 disabled:opacity-50 transition-colors shadow-lg shadow-emerald-500/20">
-                    Send Magic Link ⚡
-                 </button>
-              </div>
+            {!showOtpInput ? (
+                // VIEW 1: EMAIL INPUT
+                <div className="space-y-4">
+                    <input 
+                        type="email" 
+                        placeholder="student@uni.edu.au"
+                        className="w-full rounded-xl bg-black/40 border border-white/10 p-4 text-white placeholder-zinc-500 focus:border-emerald-500 outline-none transition-colors"
+                        value={emailInput}
+                        onChange={(e) => setEmailInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleSendCode()}
+                    />
+                    <button 
+                        onClick={handleSendCode} 
+                        disabled={loading || !emailInput}
+                        className="w-full rounded-xl bg-emerald-500 py-3 font-bold text-black hover:bg-emerald-400 disabled:opacity-50 transition-colors shadow-lg shadow-emerald-500/20">
+                        {loading ? "Sending..." : "Get Login Code ⚡"}
+                    </button>
+                </div>
             ) : (
-              <div className="rounded-xl bg-white/5 p-6 border border-white/10">
-                 {authMessage ? (
-                   <>
-                     <div className="text-emerald-400 text-lg font-bold mb-2">Check your email! 📩</div>
-                     <p className="text-zinc-400 text-xs">{authMessage}</p>
-                     <button onClick={() => setAuthMessage("")} className="mt-4 text-xs text-zinc-500 underline">Try different email</button>
-                   </>
-                 ) : (
-                   <div className="text-zinc-400 animate-pulse flex flex-col items-center gap-2">
-                      <div className="h-5 w-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-                      Sending magic link...
-                   </div>
-                 )}
-              </div>
+                // VIEW 2: OTP CODE INPUT
+                <div className="space-y-4 animate-fade-in">
+                    <div className="text-emerald-400 text-sm font-bold mb-2">Code sent! Check your email. 📩</div>
+                    <input 
+                        type="text" 
+                        placeholder="123456"
+                        className="w-full rounded-xl bg-black/40 border border-white/10 p-4 text-center text-2xl tracking-[0.5em] text-white placeholder-zinc-700 focus:border-emerald-500 outline-none transition-colors"
+                        maxLength={6}
+                        value={otpInput}
+                        onChange={(e) => setOtpInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleVerifyCode()}
+                    />
+                    <button 
+                        onClick={handleVerifyCode} 
+                        disabled={loading || otpInput.length < 6}
+                        className="w-full rounded-xl bg-emerald-500 py-3 font-bold text-black hover:bg-emerald-400 disabled:opacity-50 transition-colors shadow-lg shadow-emerald-500/20">
+                        {loading ? "Verifying..." : "Verify & Enter 🚀"}
+                    </button>
+                    <button 
+                        onClick={() => setShowOtpInput(false)} 
+                        className="text-xs text-zinc-500 underline hover:text-white mt-2">
+                        Wrong email? Go back
+                    </button>
+                </div>
             )}
             
             <p className="mt-8 text-[10px] text-zinc-600 uppercase tracking-widest">

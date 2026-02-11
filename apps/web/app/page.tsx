@@ -59,7 +59,7 @@ export default function Home() {
   useEffect(() => {
     if (!isReadyToChat || !user) return;
 
-    // Smart Parser: Handles international domains (e.g., utoronto.ca -> UTORONTO)
+    // Smart Parser: Handles international domains
     const domain = user.email.split("@")[1];
     const cleanDomain = domain.replace(/student\.|my\.|mail\.|\.edu\.au|\.edu|\.ca|\.ac\.uk|\.ac\.in/g, "");
     const uni = cleanDomain.toUpperCase().split(".")[0];
@@ -147,7 +147,6 @@ export default function Home() {
     const email = emailInput.toLowerCase().trim();
 
     // 1. The "No Gmail Allowed" Rule 🚫
-    // Blocks common public providers but allows ANY other domain (e.g. ubc.ca, ox.ac.uk)
     const publicDomains = ["gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "icloud.com", "proton.me"];
     
     if (!email.includes("@")) {
@@ -175,7 +174,8 @@ export default function Home() {
     const { error } = await supabase.auth.signInWithOtp({
       email: email,
       options: {
-        emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
+        // 🟢 THE FIX: Hardcoded URL prevents the "www" vs "non-www" redirect loop
+        emailRedirectTo: 'https://campchat.app',
       },
     });
 

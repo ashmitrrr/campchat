@@ -5,9 +5,9 @@ import { io, Socket } from "socket.io-client";
 import { supabase } from "./lib/supabase";
 import { Toaster, toast } from "sonner";
 import { COUNTRIES_CITIES, COUNTRY_FLAGS } from "./lib/countries";
+import { UNIVERSITIES_BY_COUNTRY } from "./lib/universities";
 
 const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:8080";
-const GIPHY_API_KEY = "sXpGFDGZs0Dv1mmNFvYaGUvYwKX0PWIh"; // Free public demo key
 
 const MAJORS = ["Computer Science", "Business", "Engineering", "Medicine", "Arts", "Law", "Science", "Architecture", "Design", "Psychology", "Other"];
 const GENDERS = ["Male", "Female", "Non-binary", "Prefer not to say"];
@@ -15,41 +15,51 @@ const GENDERS = ["Male", "Female", "Non-binary", "Prefer not to say"];
 export default function Home() {
   // ---- AUTH & USER STATE ----
   const [user, setUser] = useState<any>(null);
-  const [isReadyToChat, setIsReadyToChat] = useState(false);
   const [jwtToken, setJwtToken] = useState<string | null>(null);
   
-  // 🆕 NEW STATE: Controls Landing Page vs Login Screen
-  const [showLogin, setShowLogin] = useState(false);
-
+  // View States
+  const [currentView, setCurrentView] = useState<"landing" | "login" | "profile" | "terms" | "app">("landing");
+  const [activeTab, setActiveTab] = useState<"home" | "campuses" | "profile">("home");
+  const [showEditProfile, setShowEditProfile] = useState(false);
+  
   // Profile State
   const [displayName, setDisplayName] = useState("");
   const [gender, setGender] = useState("");
   const [major, setMajor] = useState("");
   const [country, setCountry] = useState("");
   const [city, setCity] = useState("");
+  const [university, setUniversity] = useState("");
   const [uniName, setUniName] = useState("");
   const [availableCities, setAvailableCities] = useState<string[]>([]);
+  const [availableUniversities, setAvailableUniversities] = useState<string[]>([]);
+  
+  // Premium State
+  const [isPremium, setIsPremium] = useState(false);
+  const [premiumUntil, setPremiumUntil] = useState<Date | null>(null);
+  
+  // Terms State
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   
   // Login Flow State
   const [emailInput, setEmailInput] = useState("");
-  const [otpInput, setOtpInput] = useState(""); 
-  const [showOtpInput, setShowOtpInput] = useState(false); 
+  const [otpInput, setOtpInput] = useState("");
+  const [showOtpInput, setShowOtpInput] = useState(false);
   const [loading, setLoading] = useState(false);
   
-  // Logic State
-  const [showTimeoutAlert, setShowTimeoutAlert] = useState(false);
-  const [isSocketConnected, setIsSocketConnected] = useState(true);
-  const [onlineCount, setOnlineCount] = useState(0);
-  const [lastRoomId, setLastRoomId] = useState<string | null>(null);
-
   // Chat State
   const [socket, setSocket] = useState<Socket | null>(null);
   const [status, setStatus] = useState("Idle");
   const [roomId, setRoomId] = useState<string | null>(null);
   const [partnerInfo, setPartnerInfo] = useState<{ uni: string; name: string; country: string } | null>(null);
-  const [messages, setMessages] = useState<{ text: string; ts: number; from: "me" | "partner"; isGif?: boolean }[]>([]);
+  const [messages, setMessages] = useState<{ text: string; ts: number; from: "me" | "partner"; isGif?: boolean; isImage?: boolean }[]>([]);
   const [input, setInput] = useState("");
   const [isPartnerTyping, setIsPartnerTyping] = useState(false);
+  const [isSocketConnected, setIsSocketConnected] = useState(true);
+  const [onlineCount, setOnlineCount] = useState(0);
+  const [lastRoomId, setLastRoomId] = useState<string | null>(null);
+  const [showTimeoutAlert, setShowTimeoutAlert] = useState(false);
+  const [isReadyToChat, setIsReadyToChat] = useState(false);
+  const [targetUniFilter, setTargetUniFilter] = useState("Any");
   
   // GIF State
   const [showGifPicker, setShowGifPicker] = useState(false);
@@ -60,15 +70,23 @@ export default function Home() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 1. CHECK SESSION & LOAD PROFILE
+  // CHECK SESSION & LOAD PROFILE
   useEffect(() => {
     const checkUser = async () => {
       const { data } = await supabase.auth.getSession();
       if (data.session?.user) {
         setUser(data.session.user);
-        await loadUserProfile(data.session.user.email);
+        const hasProfile = await loadUserProfile(data.session.user.email);
         await generateJWT(data.session);
+        
+        // If user has complete profile, skip to terms or app
+        if (hasProfile) {
+          setCurrentView("terms");
+        } else {
+          setCurrentView("profile");
+        }
       }
     };
     checkUser();
@@ -76,8 +94,14 @@ export default function Home() {
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
         setUser(session.user);
-        await loadUserProfile(session.user.email);
+        const hasProfile = await loadUserProfile(session.user.email);
         await generateJWT(session);
+        
+        if (hasProfile) {
+          setCurrentView("terms");
+        } else {
+          setCurrentView("profile");
+        }
       } else {
         handleLogoutCleanup();
       }
@@ -108,7 +132,7 @@ export default function Home() {
   };
 
   // Load User Profile from DB
-  const loadUserProfile = async (email: string) => {
+  const loadUserProfile = async (email: string): Promise<boolean> => {
     const { data, error } = await supabase
       .from("user_profiles")
       .select("*")
@@ -121,12 +145,30 @@ export default function Home() {
       setMajor(data.major || "");
       setCountry(data.country || "");
       setCity(data.city || "");
+      setUniversity(data.university || "");
       setUniName(data.uni_name || "");
       
-      if (data.country && COUNTRIES_CITIES[data.country]) {
-        setAvailableCities(COUNTRIES_CITIES[data.country]);
+      // Check premium status
+      if (data.premium_until) {
+        const premiumDate = new Date(data.premium_until);
+        setIsPremium(premiumDate > new Date());
+        setPremiumUntil(premiumDate);
       }
+      
+      if (data.country) {
+        if (COUNTRIES_CITIES[data.country]) {
+          setAvailableCities(COUNTRIES_CITIES[data.country]);
+        }
+        if (UNIVERSITIES_BY_COUNTRY[data.country]) {
+          setAvailableUniversities(UNIVERSITIES_BY_COUNTRY[data.country]);
+        }
+      }
+      
+      // Check if profile is complete
+      const isComplete = !!(data.display_name && data.gender && data.major && data.country && data.city);
+      return isComplete;
     }
+    return false;
   };
 
   // Save User Profile to DB
@@ -142,6 +184,7 @@ export default function Home() {
         major: major,
         country: country,
         city: city,
+        university: university,
         uni_name: uniName,
         updated_at: new Date().toISOString()
       });
@@ -149,16 +192,28 @@ export default function Home() {
     if (error) {
       console.error('Profile save error:', error);
       toast.error("Failed to save profile");
+    } else {
+      toast.success("Profile saved!");
     }
   };
 
-  // Update available cities when country changes
+  // Update available cities/unis when country changes
   useEffect(() => {
-    if (country && COUNTRIES_CITIES[country]) {
-      setAvailableCities(COUNTRIES_CITIES[country]);
-      setCity(""); // Reset city when country changes
-    } else {
-      setAvailableCities([]);
+    if (country) {
+      if (COUNTRIES_CITIES[country]) {
+        setAvailableCities(COUNTRIES_CITIES[country]);
+      } else {
+        setAvailableCities([]);
+      }
+      
+      if (UNIVERSITIES_BY_COUNTRY[country]) {
+        setAvailableUniversities(UNIVERSITIES_BY_COUNTRY[country]);
+      } else {
+        setAvailableUniversities([]);
+      }
+      
+      setCity("");
+      setUniversity("");
     }
   }, [country]);
 
@@ -167,20 +222,18 @@ export default function Home() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isPartnerTyping]);
 
-  // 2. CONNECT SOCKET WITH JWT
+  // CONNECT SOCKET WITH JWT
   useEffect(() => {
     if (!isReadyToChat || !user || !jwtToken) return;
 
     const domain = user.email.split("@")[1];
     const cleanDomain = domain ? domain.replace(/student\.|my\.|mail\.|\.edu\.au|\.edu|\.ca|\.ac\.uk|\.ac\.in/g, "") : "anon";
     const parsedUni = cleanDomain.toUpperCase().split(".")[0];
-    if (!uniName) setUniName(parsedUni);
-
-    const filterValue = (document.getElementById("uni-filter") as HTMLSelectElement)?.value || "Any";
+    const displayUni = university || uniName || parsedUni;
 
     const s = io(SERVER_URL, {
       transports: ["websocket"],
-      auth: { token: jwtToken }, // JWT auth instead of query params
+      auth: { token: jwtToken },
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
@@ -189,28 +242,22 @@ export default function Home() {
     setSocket(s);
     setStatus("Searching for a vibe match... 🌊");
 
-    const timer = setTimeout(() => {
-      if (!roomId && filterValue !== "Any") setShowTimeoutAlert(true);
-    }, 10000);
-
     s.on("connect", () => {
       setIsSocketConnected(true);
       reconnectAttempts.current = 0;
       
-      // Send profile data after connection
       s.emit("set_profile", {
-        uni: uniName || parsedUni,
+        uni: displayUni,
         name: displayName,
         gender: gender,
         major: major,
         country: country,
         city: city,
-        targetUni: filterValue,
+        targetUni: targetUniFilter,
       });
       
       s.emit("get_online_count");
       
-      // Try to reconnect to previous room if exists
       if (lastRoomId) {
         s.emit("reconnect_to_room", { roomId: lastRoomId });
       }
@@ -219,12 +266,12 @@ export default function Home() {
     s.on("disconnect", (reason) => {
       setIsSocketConnected(false);
       if (reason === "io server disconnect") {
-        // Server disconnected us, don't try to reconnect
         toast.error("Disconnected by server");
       }
     });
 
     s.on("connect_error", (err) => {
+      console.error("Socket connection error:", err);
       if (err.message.includes("BANNED")) {
         toast.error("⛔ You are permanently banned.");
         handleLogoutCleanup();
@@ -250,7 +297,6 @@ export default function Home() {
       setMessages([]);
       setStatus(`Vibing with ${partnerName}`);
       setShowTimeoutAlert(false);
-      clearTimeout(timer);
       toast.success("Match found! Say hi 👋");
     });
 
@@ -292,63 +338,117 @@ export default function Home() {
 
     return () => {
       s.disconnect();
-      clearTimeout(timer);
     };
-  }, [isReadyToChat, user, jwtToken]);
+  }, [isReadyToChat, user, jwtToken, targetUniFilter]);
 
   // Search GIFs
-  const searchGifs = async (query: string) => {
-    if (!query.trim()) return;
-    setIsSearchingGifs(true);
-    try {
-      const response = await fetch(
-        `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(query)}&limit=20&rating=g`
-      );
-      const data = await response.json();
-      setGifs(data.data || []);
-    } catch (err) {
-      console.error('GIF search failed:', err);
-      toast.error("Failed to load GIFs");
-    }
-    setIsSearchingGifs(false);
-  };
+  // Search GIFs
+const searchGifs = async (query: string) => {
+  if (!query.trim()) return;
+  setIsSearchingGifs(true);
+  try {
+    const response = await fetch(
+      `${SERVER_URL}/api/gifs/search?q=${encodeURIComponent(query)}`
+    );
+    const data = await response.json();
+    setGifs(data.data || []);
+  } catch (err) {
+    console.error('GIF search failed:', err);
+    toast.error("Failed to load GIFs");
+  }
+  setIsSearchingGifs(false);
+};
 
   // Load trending GIFs
-  const loadTrendingGifs = async () => {
-    setIsSearchingGifs(true);
-    try {
-      const response = await fetch(
-        `https://api.giphy.com/v1/gifs/trending?api_key=${GIPHY_API_KEY}&limit=20&rating=g`
-      );
-      const data = await response.json();
-      setGifs(data.data || []);
-    } catch (err) {
-      console.error('GIF load failed:', err);
-    }
-    setIsSearchingGifs(false);
-  };
-
+  // Load trending GIFs
+const loadTrendingGifs = async () => {
+  setIsSearchingGifs(true);
+  try {
+    const response = await fetch(
+      `${SERVER_URL}/api/gifs/trending`
+    );
+    const data = await response.json();
+    setGifs(data.data || []);
+  } catch (err) {
+    console.error('GIF load failed:', err);
+  }
+  setIsSearchingGifs(false);
+};
   // Send GIF
   const sendGif = (gifUrl: string) => {
-  if (!roomId || !socket) return;
-  const msg = { text: gifUrl, ts: Date.now(), from: "me" as const, isGif: true };
-  setMessages((prev) => [...prev, msg]);
-  socket.emit("send_message", { message: gifUrl, isGif: true }); // ✅ Send isGif flag
-  setShowGifPicker(false);
-  setGifSearch("");
-  setGifs([]);
-};
+    if (!roomId || !socket) return;
+    const msg = { text: gifUrl, ts: Date.now(), from: "me" as const, isGif: true };
+    setMessages((prev) => [...prev, msg]);
+    socket.emit("send_message", { message: gifUrl, isGif: true });
+    setShowGifPicker(false);
+    setGifSearch("");
+    setGifs([]);
+  };
+
+  // Handle Image Upload (Premium Only)
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isPremium) {
+      showPremiumPaywall();
+      return;
+    }
+    
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Image too large! Max 5MB");
+      return;
+    }
+    
+    if (!['image/jpeg', 'image/png', 'image/gif'].includes(file.type)) {
+      toast.error("Only JPG, PNG, GIF allowed");
+      return;
+    }
+    
+    toast("Uploading image...");
+    
+    const fileName = `${user.email}-${Date.now()}-${file.name}`;
+    const { data, error } = await supabase.storage
+      .from('chat-images')
+      .upload(fileName, file);
+    
+    if (error) {
+      toast.error("Upload failed!");
+      return;
+    }
+    
+    const { data: urlData } = supabase.storage
+      .from('chat-images')
+      .getPublicUrl(fileName);
+    
+    if (urlData) {
+      const msg = { text: urlData.publicUrl, ts: Date.now(), from: "me" as const, isImage: true };
+      setMessages((prev) => [...prev, msg]);
+      socket?.emit("send_message", { message: urlData.publicUrl, isImage: true });
+      toast.success("Image sent!");
+    }
+  };
+
+  // Show Premium Paywall
+  const showPremiumPaywall = () => {
+    toast.error("🔒 Premium Feature - Coffee is $5. This is $3/week. Be smart.", {
+      duration: 3000,
+    });
+    setTimeout(() => {
+      toast("Stripe checkout coming soon!");
+    }, 1000);
+  };
 
   // ---- HELPERS ----
   const handleLogoutCleanup = () => {
     setUser(null);
-    setIsReadyToChat(false);
+    setCurrentView("landing");
     setShowOtpInput(false);
     setOtpInput("");
     setEmailInput("");
     setLoading(false);
     setJwtToken(null);
-    setShowLogin(false); // Reset to landing page
+    setIsReadyToChat(false);
     localStorage.removeItem('campchat_jwt');
   };
 
@@ -385,18 +485,52 @@ export default function Home() {
     setLoading(false);
   };
 
-  const handleVerifyCode = async () => {
-    setLoading(true);
-    const { error } = await supabase.auth.verifyOtp({ 
+  // Find handleVerifyCode function (around line 240) and replace with:
+
+const handleVerifyCode = async () => {
+  setLoading(true);
+  try {
+    const { data, error } = await supabase.auth.verifyOtp({ 
       email: emailInput, 
       token: otpInput, 
       type: 'email' 
     });
-    if (error) { 
-      toast.error(error.message); 
-      setLoading(false); 
+    
+    if (error) {
+      toast.error(error.message);
+      setLoading(false);
+      return;
     }
-  };
+    
+    // ✅ Verification successful
+    toast.success("Verified! Setting up...");
+    
+    // Wait a moment for session to establish
+    setTimeout(async () => {
+      const { data: session } = await supabase.auth.getSession();
+      if (session?.session?.user) {
+        setUser(session.session.user);
+        const hasProfile = await loadUserProfile(session.session.user.email);
+        await generateJWT(session.session);
+        
+        if (hasProfile) {
+          setCurrentView("terms");
+        } else {
+          setCurrentView("profile");
+        }
+        setLoading(false);
+      } else {
+        toast.error("Session error. Please try again.");
+        setLoading(false);
+      }
+    }, 500);
+    
+  } catch (err) {
+    console.error("Verification error:", err);
+    toast.error("Verification failed. Try again.");
+    setLoading(false);
+  }
+};
 
   const handleTyping = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInput(e.target.value);
@@ -421,15 +555,6 @@ export default function Home() {
     toast.success("Link copied!");
   };
 
-  const handleGoGlobal = () => { 
-    if (socket) { 
-      socket.emit("update_preference", { targetUni: "Any" }); 
-      setShowTimeoutAlert(false); 
-      setStatus("Expanded search to Global 🌍"); 
-      toast("Searching Globally!"); 
-    }
-  };
-
   const handleDisconnect = () => { 
     if (socket) socket.disconnect(); 
     setSocket(null); 
@@ -437,21 +562,21 @@ export default function Home() {
     setLastRoomId(null);
     setMessages([]); 
     setPartnerInfo(null); 
-    setIsReadyToChat(false); 
+    setIsReadyToChat(false);
     setStatus("Idle"); 
     setShowTimeoutAlert(false); 
   };
 
   const handleNextMatch = () => { 
     if (!socket) return; 
-    setMessages([]); 
+    setMessages([]);
     setRoomId(null); 
     setLastRoomId(null);
     setPartnerInfo(null); 
     setStatus("Skipping... ⏭️"); 
     socket.disconnect(); 
-    setIsReadyToChat(false); 
-    setTimeout(() => setIsReadyToChat(true), 100); 
+    setIsReadyToChat(false);
+    setTimeout(() => setIsReadyToChat(true), 100);
   };
 
   const handleReport = () => { 
@@ -475,52 +600,41 @@ export default function Home() {
     }
     
     await saveUserProfile();
-    setIsReadyToChat(true);
+    setCurrentView("terms");
+  };
+  
+  const handleAcceptTerms = () => {
+    if (!acceptedTerms) {
+      toast.error("Please accept the terms!");
+      return;
+    }
+    setCurrentView("app");
+  };
+  
+  const handleEditProfile = () => {
+    setShowEditProfile(true);
+  };
+  
+  const handleSaveEditedProfile = async () => {
+    await saveUserProfile();
+    setShowEditProfile(false);
   };
 
-  // 🧱 COMPONENT: NAVBAR
-  const Navbar = () => (
-    <nav className="w-full h-16 border-b border-white/5 bg-black/50 backdrop-blur-md flex items-center justify-between px-6 shrink-0 z-50">
-      <div className="flex items-center gap-2">
-        <img src="/logo.png" alt="Logo" className="w-9 h-9 object-contain" />
-        <span className="font-bold text-white tracking-tight">CampChat</span>
-      </div>
-      
-      <div className="flex items-center gap-4">
-        <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-zinc-900 rounded-full border border-white/10">
-          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span className="text-xs font-medium text-zinc-400">
-            {onlineCount > 0 ? `${onlineCount} Online` : 'Offline'}
-          </span>
-        </div>
-        {user && (
-          <button 
-            onClick={handleLogout} 
-            className="text-xs font-medium text-zinc-500 hover:text-white transition-colors"
-          >
-            Log out
-          </button>
-        )}
-      </div>
-    </nav>
-  );
-
-  // ---- VIEW 0: LANDING PAGE (New) ----
-  if (!user && !showLogin) {
-    return <LandingPage onLoginClick={() => setShowLogin(true)} />;
+  // ---- VIEW: LANDING PAGE ----
+  if (currentView === "landing") {
+    return <LandingPage onLoginClick={() => setCurrentView("login")} />;
   }
 
-  // ---- VIEW 1: LOGIN (Modified with Back Button) ----
-  if (!user && showLogin) {
+  // ---- VIEW: LOGIN ----
+  if (currentView === "login") {
     return (
       <div className="flex flex-col h-screen overflow-hidden bg-black">
-        <Navbar />
+        <MobileNavbar onlineCount={onlineCount} onLogout={null} />
         <Toaster position="top-center" richColors theme="dark" />
         
         <div className="flex-1 flex flex-col items-center justify-center p-6 relative">
-          {/* Back to Home Button */}
           <button 
-            onClick={() => setShowLogin(false)}
+            onClick={() => setCurrentView("landing")}
             className="absolute top-24 left-6 text-zinc-500 hover:text-white flex items-center gap-2 text-sm transition-colors z-20"
           >
             ← Back to Home
@@ -540,7 +654,7 @@ export default function Home() {
                 <input 
                   type="email" 
                   placeholder="student@uni.edu.au" 
-                  className="input-solid w-full rounded-xl p-4" 
+                  className="mobile-input input-solid w-full rounded-xl p-4" 
                   value={emailInput} 
                   onChange={(e) => setEmailInput(e.target.value)} 
                   onKeyDown={(e) => e.key === "Enter" && handleSendCode()} 
@@ -561,7 +675,7 @@ export default function Home() {
                 <input 
                   type="text" 
                   placeholder="123456" 
-                  className="input-solid w-full rounded-xl p-4 text-center text-2xl tracking-[0.5em]" 
+                  className="mobile-input input-solid w-full rounded-xl p-4 text-center text-2xl tracking-[0.5em]" 
                   maxLength={6} 
                   value={otpInput} 
                   onChange={(e) => setOtpInput(e.target.value)} 
@@ -591,15 +705,15 @@ export default function Home() {
     );
   }
 
-  // ---- VIEW 2: PROFILE SETUP ----
-  if (!isReadyToChat) {
+  // ---- VIEW: PROFILE SETUP ----
+  if (currentView === "profile") {
     return (
       <div className="flex flex-col h-screen bg-black">
-        <Navbar />
+        <MobileNavbar onlineCount={onlineCount} onLogout={handleLogout} />
         <Toaster position="top-center" richColors theme="dark" />
         
-        <div className="flex-1 flex flex-col items-center justify-center p-4">
-          <div className="solid-panel w-full max-w-md rounded-2xl p-8 relative overflow-hidden">
+        <div className="flex-1 flex flex-col items-center justify-center p-4 pb-24">
+          <div className="solid-panel w-full max-w-md rounded-2xl p-6 sm:p-8 relative overflow-hidden">
             <h1 className="text-2xl font-bold text-white mb-6">Setup Profile</h1>
             
             <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
@@ -608,7 +722,7 @@ export default function Home() {
                   Display Name
                 </label>
                 <input 
-                  className="input-solid w-full mt-1 rounded-xl p-3" 
+                  className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
                   placeholder="e.g. Coffee Addict" 
                   value={displayName} 
                   onChange={(e) => setDisplayName(e.target.value)} 
@@ -621,7 +735,7 @@ export default function Home() {
                     Gender
                   </label>
                   <select 
-                    className="input-solid w-full mt-1 rounded-xl p-3" 
+                    className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
                     value={gender} 
                     onChange={(e) => setGender(e.target.value)}
                   >
@@ -634,7 +748,7 @@ export default function Home() {
                     Major
                   </label>
                   <select 
-                    className="input-solid w-full mt-1 rounded-xl p-3" 
+                    className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
                     value={major} 
                     onChange={(e) => setMajor(e.target.value)}
                   >
@@ -644,47 +758,63 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
-                    Country
-                  </label>
-                  <select 
-                    className="input-solid w-full mt-1 rounded-xl p-3" 
-                    value={country} 
-                    onChange={(e) => setCountry(e.target.value)}
-                  >
-                    <option value="" disabled>Select Country</option>
-                    {Object.keys(COUNTRIES_CITIES).sort().map(c => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex-1">
-                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
-                    City
-                  </label>
-                  <select 
-                    className="input-solid w-full mt-1 rounded-xl p-3" 
-                    value={city} 
-                    onChange={(e) => setCity(e.target.value)}
-                    disabled={!country}
-                  >
-                    <option value="" disabled>
-                      {country ? "Select City" : "Select Country First"}
-                    </option>
-                    {availableCities.map(c => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
+              <div>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
+                  Country
+                </label>
+                <select 
+                  className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
+                  value={country} 
+                  onChange={(e) => setCountry(e.target.value)}
+                >
+                  <option value="" disabled>Select Country</option>
+                  {Object.keys(COUNTRIES_CITIES).sort().map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+              
+              <div>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
+                  City
+                </label>
+                <select 
+                  className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
+                  value={city} 
+                  onChange={(e) => setCity(e.target.value)}
+                  disabled={!country}
+                >
+                  <option value="" disabled>
+                    {country ? "Select City" : "Select Country First"}
+                  </option>
+                  {availableCities.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+              
+              <div>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
+                  University (Optional)
+                </label>
+                <select 
+                  className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
+                  value={university} 
+                  onChange={(e) => setUniversity(e.target.value)}
+                  disabled={!country}
+                >
+                  <option value="">Skip for now</option>
+                  {availableUniversities.map(u => (
+                    <option key={u} value={u}>{u}</option>
+                  ))}
+                </select>
               </div>
 
               <button 
                 onClick={handleStartChat}
                 className="btn-emerald w-full rounded-xl py-3 mt-2"
               >
-                Start Matching 🚀
+                Continue 🚀
               </button>
             </div>
           </div>
@@ -693,244 +823,763 @@ export default function Home() {
     );
   }
 
-  // ---- VIEW 3: CHAT SCREEN ----
-  return (
-    <div className="flex flex-col h-[100dvh] bg-black overflow-hidden">
-      <Navbar />
-      <Toaster position="top-center" richColors theme="dark" />
-      
-      <div className="flex-1 flex flex-col w-full max-w-3xl mx-auto sm:my-4 sm:rounded-2xl sm:border sm:border-white/10 sm:bg-zinc-900/50 relative overflow-hidden">
+  // ---- VIEW: TERMS & CONDITIONS ----
+  if (currentView === "terms") {
+    return (
+      <div className="flex flex-col h-screen bg-black">
+        <MobileNavbar onlineCount={onlineCount} onLogout={handleLogout} />
+        <Toaster position="top-center" richColors theme="dark" />
         
-        {/* TIMEOUT POPUP */}
-        {showTimeoutAlert && !roomId && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6">
-            <div className="solid-panel p-6 text-center max-w-xs rounded-xl">
-              <h3 className="text-xl font-bold text-white mb-2">No match found 😔</h3>
-              <button 
-                onClick={handleGoGlobal} 
-                className="btn-emerald w-full rounded-lg py-2 mb-2"
-              >
-                Search Globally 🌍
-              </button>
-              <button 
-                onClick={() => setShowTimeoutAlert(false)} 
-                className="text-xs text-zinc-500 hover:text-white"
-              >
-                Keep Waiting
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* GIF PICKER POPUP */}
-        {showGifPicker && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-            <div className="solid-panel w-full max-w-lg rounded-xl overflow-hidden">
-              <div className="p-4 border-b border-white/10 flex items-center justify-between">
-                <h3 className="text-lg font-bold text-white">Search GIFs</h3>
-                <button 
-                  onClick={() => { setShowGifPicker(false); setGifSearch(""); setGifs([]); }}
-                  className="text-zinc-400 hover:text-white text-xl"
-                >
-                  ✕
-                </button>
+        <div className="flex-1 flex flex-col items-center justify-center p-4 pb-24">
+          <div className="solid-panel w-full max-w-2xl rounded-2xl p-6 sm:p-8 relative overflow-hidden">
+            <h1 className="text-3xl font-bold text-white mb-2">The Vibe Check ✨</h1>
+            <p className="text-zinc-400 text-sm mb-6">Quick rules before you enter the campfire.</p>
+            
+            <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar mb-6">
+              <div className="flex gap-3 items-start">
+                <span className="text-2xl shrink-0">🚫</span>
+                <div>
+                  <h3 className="font-bold text-white mb-1">Don't be a creep</h3>
+                  <p className="text-sm text-zinc-400">No harassment, hate speech, or inappropriate behavior. We have zero tolerance.</p>
+                </div>
               </div>
               
-              <div className="p-4 border-b border-white/10">
-                <div className="flex gap-2">
-                  <input 
-                    type="text"
-                    placeholder="Search for GIFs..."
-                    className="input-solid flex-1 rounded-lg p-2 text-sm"
-                    value={gifSearch}
-                    onChange={(e) => setGifSearch(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && searchGifs(gifSearch)}
-                  />
-                  <button 
-                    onClick={() => searchGifs(gifSearch)}
-                    className="btn-emerald rounded-lg px-4 text-sm"
-                    disabled={isSearchingGifs}
-                  >
-                    Search
-                  </button>
+              <div className="flex gap-3 items-start">
+                <span className="text-2xl shrink-0">🤖</span>
+                <div>
+                  <h3 className="font-bold text-white mb-1">No bots allowed</h3>
+                  <p className="text-sm text-zinc-400">This is for real humans only. If you're caught botting, instant ban.</p>
                 </div>
-                <button 
-                  onClick={loadTrendingGifs}
-                  className="text-xs text-emerald-400 hover:text-emerald-300 mt-2"
-                >
-                  Show Trending
-                </button>
               </div>
-
-              <div className="p-4 grid grid-cols-3 gap-2 max-h-96 overflow-y-auto">
-                {isSearchingGifs ? (
-                  <div className="col-span-3 text-center text-zinc-500 py-8">Loading...</div>
-                ) : gifs.length === 0 ? (
-                  <div className="col-span-3 text-center text-zinc-500 py-8">
-                    Search for GIFs or view trending
-                  </div>
-                ) : (
-                  gifs.map((gif) => (
-                    <button
-                      key={gif.id}
-                      onClick={() => sendGif(gif.images.fixed_height.url)}
-                      className="aspect-square rounded-lg overflow-hidden hover:opacity-80 transition-opacity"
-                    >
-                      <img 
-                        src={gif.images.fixed_height.url} 
-                        alt={gif.title}
-                        className="w-full h-full object-cover"
-                      />
-                    </button>
-                  ))
-                )}
+              
+              <div className="flex gap-3 items-start">
+                <span className="text-2xl shrink-0">📸</span>
+                <div>
+                  <h3 className="font-bold text-white mb-1">Respect privacy</h3>
+                  <p className="text-sm text-zinc-400">Don't share personal info, screenshots, or recordings. What happens in the chat stays in the chat.</p>
+                </div>
+              </div>
+              
+              <div className="flex gap-3 items-start">
+                <span className="text-2xl shrink-0">🎓</span>
+                <div>
+                  <h3 className="font-bold text-white mb-1">Students only</h3>
+                  <p className="text-sm text-zinc-400">Verified .edu emails only. If you're not a student, this ain't for you.</p>
+                </div>
+              </div>
+              
+              <div className="flex gap-3 items-start">
+                <span className="text-2xl shrink-0">🚨</span>
+                <div>
+                  <h3 className="font-bold text-white mb-1">Three strikes policy</h3>
+                  <p className="text-sm text-zinc-400">Get reported 3 times? You're out. Permanently.</p>
+                </div>
               </div>
             </div>
+            
+            <div className="flex items-start gap-3 p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20 mb-6">
+              <input 
+                type="checkbox" 
+                id="accept-terms" 
+                checked={acceptedTerms} 
+                onChange={(e) => setAcceptedTerms(e.target.checked)}
+                className="w-5 h-5 mt-0.5 rounded border-emerald-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500 cursor-pointer"
+              />
+              <label htmlFor="accept-terms" className="text-sm text-zinc-300 cursor-pointer select-none">
+                I promise to be cool, respectful, and follow the rules. I understand that breaking these rules means I'm out.
+              </label>
+            </div>
+            
+            <button 
+              onClick={handleAcceptTerms}
+              disabled={!acceptedTerms}
+              className="btn-emerald w-full rounded-xl py-4"
+            >
+              Let's Go! 🔥
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- VIEW: MAIN APP WITH TABS ----
+  if (currentView === "app") {
+    return (
+      <div className="flex flex-col h-screen bg-black overflow-hidden">
+        <MobileNavbar onlineCount={onlineCount} onLogout={handleLogout} />
+        <Toaster position="top-center" richColors theme="dark" />
+        
+        {/* MAIN CONTENT AREA */}
+        <div className="flex-1 overflow-hidden pb-16">
+          {/* HOME TAB - 1-on-1 Chat */}
+          {activeTab === "home" && (
+            isReadyToChat ? (
+              <ChatView
+                roomId={roomId}
+                partnerInfo={partnerInfo}
+                messages={messages}
+                input={input}
+                isPartnerTyping={isPartnerTyping}
+                isSocketConnected={isSocketConnected}
+                status={status}
+                showTimeoutAlert={showTimeoutAlert}
+                showGifPicker={showGifPicker}
+                gifSearch={gifSearch}
+                gifs={gifs}
+                isSearchingGifs={isSearchingGifs}
+                isPremium={isPremium}
+                messagesEndRef={messagesEndRef}
+                fileInputRef={fileInputRef}
+                onTyping={handleTyping}
+                onSendMessage={sendMessage}
+                onReport={handleReport}
+                onNextMatch={handleNextMatch}
+                onShare={handleShare}
+                onDisconnect={handleDisconnect}
+                onShowGifPicker={() => { setShowGifPicker(true); loadTrendingGifs(); }}
+                onCloseGifPicker={() => { setShowGifPicker(false); setGifSearch(""); setGifs([]); }}
+                onSearchGifs={searchGifs}
+                onSendGif={sendGif}
+                onImageUpload={handleImageUpload}
+                showPremiumPaywall={showPremiumPaywall}
+                setGifSearch={setGifSearch}
+                onEndChat={() => setIsReadyToChat(false)} 
+              />
+            ) : (
+              <StartChatView 
+                isPremium={isPremium}
+                targetUniFilter={targetUniFilter}
+                setTargetUniFilter={setTargetUniFilter}
+                onStartChat={() => setIsReadyToChat(true)}
+                showPremiumPaywall={showPremiumPaywall}
+                availableUniversities={availableUniversities}
+              />
+            )
+          )}
+          
+          {/* CAMPUSES TAB */}
+          {activeTab === "campuses" && (
+            <CampusesView />
+          )}
+          
+          {/* PROFILE TAB */}
+          {activeTab === "profile" && (
+            <ProfileView
+              displayName={displayName}
+              email={user?.email}
+              isPremium={isPremium}
+              premiumUntil={premiumUntil}
+              onLogout={handleLogout}
+              onEditProfile={handleEditProfile}
+              showEditProfile={showEditProfile}
+              setDisplayName={setDisplayName}
+              setGender={setGender}
+              setMajor={setMajor}
+              setCountry={setCountry}
+              setCity={setCity}
+              setUniversity={setUniversity}
+              gender={gender}
+              major={major}
+              country={country}
+              city={city}
+              university={university}
+              availableCities={availableCities}
+              availableUniversities={availableUniversities}
+              onSave={handleSaveEditedProfile}
+              onCancel={() => setShowEditProfile(false)}
+            />
+          )}
+        </div>
+        
+        {/* BOTTOM TAB BAR */}
+        <BottomTabBar activeTab={activeTab} onTabChange={setActiveTab} />
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// ==================== COMPONENTS ====================
+
+// Mobile Navbar
+function MobileNavbar({ onlineCount, onLogout }: { onlineCount: number; onLogout: (() => void) | null }) {
+  return (
+    <nav className="w-full h-14 border-b border-white/5 bg-black/95 backdrop-blur-md flex items-center justify-between px-4 shrink-0 z-50">
+      <div className="flex items-center gap-2">
+        <img src="/logo.png" alt="Logo" className="w-8 h-8 object-contain" />
+        <span className="font-bold text-white text-sm tracking-tight">CampChat</span>
+      </div>
+      
+      <div className="flex items-center gap-3">
+        {onlineCount > 0 && (
+          <div className="flex items-center gap-1.5 px-2 py-1 bg-zinc-900 rounded-full border border-white/10">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span className="text-[10px] font-medium text-zinc-400">{onlineCount}</span>
+          </div>
+        )}
+        {onLogout && (
+          <button 
+            onClick={onLogout} 
+            className="text-[10px] font-medium text-zinc-500 hover:text-white transition-colors"
+          >
+            Logout
+          </button>
+        )}
+      </div>
+    </nav>
+  );
+}
+
+// Bottom Tab Bar
+function BottomTabBar({ activeTab, onTabChange }: { activeTab: string; onTabChange: (tab: "home" | "campuses" | "profile") => void }) {
+  return (
+    <div className="fixed bottom-0 left-0 right-0 h-16 bg-zinc-900/95 backdrop-blur-xl border-t border-white/10 flex items-center justify-around px-2 z-50">
+      <button
+        onClick={() => onTabChange("home")}
+        className={`flex flex-col items-center justify-center flex-1 py-2 rounded-xl transition-colors ${
+          activeTab === "home" ? "text-emerald-400" : "text-zinc-500"
+        }`}
+      >
+        <span className="text-xl mb-0.5">🏠</span>
+        <span className="text-[10px] font-medium">Home</span>
+      </button>
+      
+      <button
+        onClick={() => onTabChange("campuses")}
+        className={`flex flex-col items-center justify-center flex-1 py-2 rounded-xl transition-colors ${
+          activeTab === "campuses" ? "text-emerald-400" : "text-zinc-500"
+        }`}
+      >
+        <span className="text-xl mb-0.5">⛺</span>
+        <span className="text-[10px] font-medium">Campuses</span>
+      </button>
+      
+      <button
+        onClick={() => onTabChange("profile")}
+        className={`flex flex-col items-center justify-center flex-1 py-2 rounded-xl transition-colors ${
+          activeTab === "profile" ? "text-emerald-400" : "text-zinc-500"
+        }`}
+      >
+        <span className="text-xl mb-0.5">👤</span>
+        <span className="text-[10px] font-medium">Profile</span>
+      </button>
+    </div>
+  );
+}
+
+// START CHAT VIEW (New - with Premium Matching)
+function StartChatView({ isPremium, targetUniFilter, setTargetUniFilter, onStartChat, showPremiumPaywall, availableUniversities }: any) {
+  return (
+    <div className="h-full flex flex-col items-center justify-center p-4 bg-black/20">
+      <div className="solid-panel w-full max-w-md rounded-2xl p-8 text-center">
+        <div className="mb-6">
+          <div className="inline-block rounded-full bg-emerald-500/10 p-6 border border-emerald-500/20 mb-4">
+            <span className="text-5xl">💬</span>
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-2">Ready to Chat?</h2>
+          <p className="text-sm text-zinc-400">Choose your matching preference</p>
+        </div>
+
+        {/* Premium Filters (if premium) */}
+        {isPremium && (
+          <div className="mb-6 p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20">
+            <label className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-2 block">
+              Filter by University
+            </label>
+            <select 
+              className="mobile-input input-solid w-full rounded-xl p-3" 
+              value={targetUniFilter} 
+              onChange={(e) => setTargetUniFilter(e.target.value)}
+            >
+              <option value="Any">Any University</option>
+              {availableUniversities.map((u: string) => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </select>
           </div>
         )}
 
-        {/* CHAT HEADER */}
-        <div className="h-16 border-b border-white/5 bg-zinc-900/80 backdrop-blur-md flex items-center justify-between px-4 shrink-0">
-          <div>
-            <div className="flex items-center gap-2">
-              {roomId && partnerInfo?.country && (
-                <span className="text-lg">{COUNTRY_FLAGS[partnerInfo.country]}</span>
-              )}
-              <h2 className="font-bold text-white">
-                {roomId ? partnerInfo?.name : "Searching..."}
-              </h2>
-              {roomId && partnerInfo?.uni && (
-                <span className="rounded px-1.5 py-0.5 text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                  {partnerInfo.uni}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {!isSocketConnected ? (
-                <span className="text-[10px] text-amber-500 animate-pulse">Reconnecting...</span>
-              ) : (
-                <p className="text-xs text-zinc-400">
-                  {roomId ? <span className="text-emerald-500">● Online</span> : status}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="flex gap-2">
-            {roomId ? (
-              <>
-                <button 
-                  onClick={handleReport} 
-                  className="p-2 bg-red-500/10 text-red-400 rounded-lg hover:bg-red-500/20 text-xs"
-                >
-                  🚩 Report
-                </button>
-                <button 
-                  onClick={handleNextMatch} 
-                  className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white rounded-lg text-xs font-medium border border-white/5"
-                >
-                  Skip
-                </button>
-              </>
-            ) : (
-              <button 
-                onClick={handleShare} 
-                className="px-3 py-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg text-xs hover:bg-emerald-500/20"
-              >
-                Share Link 🔗
-              </button>
-            )}
+        {/* Free User - Show Locked Premium */}
+        {!isPremium && (
+          <div className="mb-6">
             <button 
-              onClick={handleDisconnect} 
-              className="px-3 py-1.5 bg-zinc-800 text-zinc-400 hover:text-white rounded-lg text-xs"
+              onClick={showPremiumPaywall}
+              className="w-full p-4 rounded-xl bg-zinc-900/50 border border-white/10 hover:border-emerald-500/30 transition-all text-left group relative overflow-hidden"
             >
-              Exit
+              <div className="absolute top-2 right-2 px-2 py-1 bg-emerald-500/10 text-emerald-400 text-[10px] font-bold rounded-full border border-emerald-500/20">
+                PREMIUM
+              </div>
+              <div className="flex items-center gap-3 opacity-50 group-hover:opacity-100 transition-opacity">
+                <span className="text-2xl">🎯</span>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Premium Matching</h3>
+                  <p className="text-xs text-zinc-400">Filter by university, gender, major</p>
+                </div>
+                <span className="ml-auto text-xl">🔒</span>
+              </div>
             </button>
           </div>
-        </div>
+        )}
 
-        {/* MESSAGES AREA */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-black/20">
-          {messages.length === 0 && (
-            <div className="flex h-full flex-col items-center justify-center text-zinc-600">
-              <div className="mb-4 rounded-full bg-zinc-900 p-6 border border-white/5">
-                <span className="text-3xl animate-pulse grayscale opacity-50">📡</span>
-              </div>
-              <p className="text-sm font-medium">Scanning frequency...</p>
-            </div>
-          )}
-          {messages.map((m, i) => (
-            <div key={i} className={`flex flex-col ${m.from === "me" ? "items-end" : "items-start"}`}>
-              <div className={`max-w-[85%] rounded-2xl overflow-hidden shadow-sm ${m.from === "me" ? "bg-emerald-600 text-white rounded-tr-none shadow-[0_2px_10px_rgba(16,185,129,0.2)]" : "bg-zinc-800 text-zinc-200 rounded-tl-none border border-white/5"}`}>
-                {m.isGif ? (
-                  <img src={m.text} alt="GIF" className="max-w-full rounded-2xl" />
-                ) : (
-                  <div className="px-4 py-3 text-sm">{m.text}</div>
-                )}
-              </div>
-              <span className="text-[10px] text-zinc-600 mt-1 px-1">
-                {m.from === "me" ? "Me" : partnerInfo?.name}
-              </span>
-            </div>
-          ))}
-          {isPartnerTyping && (
-            <div className="flex items-center gap-2 p-2">
-              <div className="flex space-x-1 rounded-2xl bg-zinc-900 border border-white/5 px-4 py-3 rounded-tl-none">
-                <div className="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:-0.3s]"></div>
-                <div className="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:-0.15s]"></div>
-                <div className="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce"></div>
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* INPUT AREA */}
-        <div className="p-4 bg-zinc-900/80 backdrop-blur-md border-t border-white/5 shrink-0">
-          <div className="flex gap-2">
-            <button
-              onClick={() => {
-                if (!roomId) {
-                  toast.error("Wait for a match first!");
-                  return;
-                }
-                setShowGifPicker(true);
-                loadTrendingGifs();
-              }}
-              disabled={!roomId}
-              className="p-3 bg-white/5 hover:bg-white/10 rounded-xl text-xl disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Send GIF"
-            >
-              🎬
-            </button>
-            <input 
-              className="input-solid flex-1 rounded-xl px-4 py-3 text-sm" 
-              placeholder={roomId ? "Type a message..." : "Waiting for partner..."} 
-              value={input} 
-              onChange={handleTyping} 
-              onKeyDown={(e) => e.key === "Enter" && sendMessage()} 
-              disabled={!roomId} 
-            />
-            <button 
-              onClick={sendMessage} 
-              disabled={!roomId} 
-              className="btn-emerald rounded-xl px-6"
-            >
-              Send
-            </button>
-          </div>
-        </div>
-
+        <button 
+          onClick={onStartChat}
+          className="btn-emerald w-full rounded-xl py-4 text-lg"
+        >
+          Start Chatting 🚀
+        </button>
       </div>
     </div>
   );
 }
 
-// ---- NEW: LANDING PAGE COMPONENT (Updated with "The Campuses") ----
+// Chat View Component
+function ChatView(props: any) {  // ✅ CORRECT // Add onEndChat here
+  return (
+    <div className="flex flex-col h-full">
+      {/* Chat Header */}
+      <div className="h-14 border-b border-white/5 bg-zinc-900/80 backdrop-blur-md flex items-center justify-between px-4 shrink-0">
+        <div className="flex items-center gap-2">
+          {props.roomId && props.partnerInfo?.country && (
+            <span className="text-base">{COUNTRY_FLAGS[props.partnerInfo.country]}</span>
+          )}
+          <div>
+            <h2 className="font-bold text-white text-sm leading-tight">
+              {props.roomId ? props.partnerInfo?.name : "Searching..."}
+            </h2>
+            {props.roomId && props.partnerInfo?.uni && (
+              <span className="text-[9px] font-bold text-blue-400">{props.partnerInfo.uni}</span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-1">
+          {props.roomId && (
+            <>
+              <button 
+                onClick={props.onReport} 
+                className="p-1.5 bg-red-500/10 text-red-400 rounded-lg text-[10px]"
+              >
+                🚩
+              </button>
+              <button 
+                onClick={props.onNextMatch} 
+                className="px-2 py-1 bg-white/5 text-white rounded-lg text-[10px] font-medium"
+              >
+                Skip
+              </button>
+            </>
+          )}
+          {/* NEW: End Chat button - always visible */}
+          <button 
+            onClick={props.onEndChat}
+            className="px-2 py-1 bg-red-500/10 text-red-400 rounded-lg text-[10px] font-medium border border-red-500/20 hover:bg-red-500/20"
+          >
+            End Chat
+          </button>
+        </div>
+      </div>
+
+      {/* Messages Area */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-black/20">
+        {props.messages.length === 0 && (
+          <div className="flex h-full flex-col items-center justify-center text-zinc-600">
+            <div className="mb-3 rounded-full bg-zinc-900 p-4 border border-white/5">
+              <span className="text-2xl animate-pulse grayscale opacity-50">📡</span>
+            </div>
+            <p className="text-xs font-medium">Scanning frequency...</p>
+          </div>
+        )}
+        {props.messages.map((m: any, i: number) => (
+          <div key={i} className={`flex flex-col ${m.from === "me" ? "items-end" : "items-start"}`}>
+            <div className={`max-w-[85%] rounded-2xl overflow-hidden shadow-sm ${m.from === "me" ? "bg-emerald-600 text-white rounded-tr-none" : "bg-zinc-800 text-zinc-200 rounded-tl-none border border-white/5"}`}>
+              {m.isGif || m.isImage ? (
+                <img src={m.text} alt="Media" className="max-w-full rounded-2xl" />
+              ) : (
+                <div className="px-3 py-2 text-sm">{m.text}</div>
+              )}
+            </div>
+            <span className="text-[9px] text-zinc-600 mt-0.5 px-1">
+              {m.from === "me" ? "Me" : props.partnerInfo?.name}
+            </span>
+          </div>
+        ))}
+        {props.isPartnerTyping && (
+          <div className="flex items-center gap-2">
+            <div className="flex space-x-1 rounded-2xl bg-zinc-900 border border-white/5 px-3 py-2 rounded-tl-none">
+              <div className="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:-0.3s]"></div>
+              <div className="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:-0.15s]"></div>
+              <div className="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce"></div>
+            </div>
+          </div>
+        )}
+        <div ref={props.messagesEndRef} />
+      </div>
+
+      {/* Input Area */}
+      <div className="p-3 bg-zinc-900/80 backdrop-blur-md border-t border-white/5 shrink-0">
+        <div className="flex gap-2">
+          <button
+            onClick={() => {
+              if (!props.roomId) {
+                toast.error("Wait for a match first!");
+                return;
+              }
+              props.onShowGifPicker();
+            }}
+            disabled={!props.roomId}
+            className="p-2 bg-white/5 hover:bg-white/10 rounded-xl text-lg disabled:opacity-50"
+          >
+            🎬
+          </button>
+          
+          <button
+            onClick={() => {
+              if (!props.roomId) {
+                toast.error("Wait for a match first!");
+                return;
+              }
+              if (!props.isPremium) {
+                props.showPremiumPaywall();
+                return;
+              }
+              props.fileInputRef.current?.click();
+            }}
+            disabled={!props.roomId}
+            className="p-2 bg-white/5 hover:bg-white/10 rounded-xl text-lg disabled:opacity-50 relative"
+          >
+            📸
+            {!props.isPremium && (
+              <span className="absolute -top-1 -right-1 text-[8px]">🔒</span>
+            )}
+          </button>
+          <input 
+            ref={props.fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/gif"
+            onChange={props.onImageUpload}
+            className="hidden"
+          />
+          
+          <input 
+            className="mobile-input input-solid flex-1 rounded-xl px-3 py-2 text-sm" 
+            placeholder={props.roomId ? "Type..." : "Waiting..."} 
+            value={props.input} 
+            onChange={props.onTyping} 
+            onKeyDown={(e) => e.key === "Enter" && props.onSendMessage()} 
+            disabled={!props.roomId} 
+          />
+          <button 
+            onClick={props.onSendMessage} 
+            disabled={!props.roomId} 
+            className="btn-emerald rounded-xl px-4 text-sm"
+          >
+            Send
+          </button>
+        </div>
+      </div>
+      
+      {/* GIF Picker Modal */}
+      {props.showGifPicker && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
+          <div className="solid-panel w-full max-w-lg rounded-xl overflow-hidden max-h-[80vh] flex flex-col">
+            <div className="p-3 border-b border-white/10 flex items-center justify-between shrink-0">
+              <h3 className="text-sm font-bold text-white">Search GIFs</h3>
+              <button 
+                onClick={props.onCloseGifPicker}
+                className="text-zinc-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="p-3 border-b border-white/10 shrink-0">
+              <div className="flex gap-2">
+                <input 
+                  type="text"
+                  placeholder="Search..."
+                  className="mobile-input input-solid flex-1 rounded-lg p-2 text-sm"
+                  value={props.gifSearch}
+                  onChange={(e) => props.setGifSearch(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && props.onSearchGifs(props.gifSearch)}
+                />
+                <button 
+                  onClick={() => props.onSearchGifs(props.gifSearch)}
+                  className="btn-emerald rounded-lg px-3 text-xs"
+                >
+                  Go
+                </button>
+              </div>
+            </div>
+
+            <div className="p-3 grid grid-cols-3 gap-2 overflow-y-auto flex-1">
+              {props.isSearchingGifs ? (
+                <div className="col-span-3 text-center text-zinc-500 py-4 text-xs">Loading...</div>
+              ) : props.gifs.length === 0 ? (
+                <div className="col-span-3 text-center text-zinc-500 py-4 text-xs">Search for GIFs</div>
+              ) : (
+                props.gifs.map((gif: any) => (
+                  <button
+                    key={gif.id}
+                    onClick={() => props.onSendGif(gif.images.fixed_height.url)}
+                    className="aspect-square rounded-lg overflow-hidden hover:opacity-80"
+                  >
+                    <img 
+                      src={gif.images.fixed_height.url} 
+                      alt={gif.title}
+                      className="w-full h-full object-cover"
+                    />
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Campuses View Component
+function CampusesView() {
+  const campuses = [
+    { name: "Campus Social", icon: "🥂", color: "pink", desc: "Chill & banter", online: "1.2k" },
+    { name: "Campus Career", icon: "💼", color: "blue", desc: "Network & grind", online: "850" },
+    { name: "Campus Founder", icon: "🚀", color: "amber", desc: "Build & pitch", online: "420" },
+    { name: "Campus Global", icon: "🌏", color: "teal", desc: "International vibes", online: "3.1k" },
+    { name: "Campus Sports", icon: "⚽", color: "red", desc: "Match talk", online: "950" },
+    { name: "Campus Study", icon: "📚", color: "indigo", desc: "Focus sessions", online: "1.5k" },
+  ];
+  
+  return (
+    <div className="h-full overflow-y-auto p-4 pb-8">
+      <div className="mb-4">
+        <h1 className="text-2xl font-bold text-white mb-1">Find Your Tribe</h1>
+        <p className="text-sm text-zinc-400">Join group chats for every aspect of uni life.</p>
+      </div>
+      
+      <div className="grid grid-cols-2 gap-3">
+        {campuses.map((campus, i) => (
+          <button
+            key={i}
+            onClick={() => toast("Coming soon! Campus rooms launching in v5 🔥")}
+            className="p-4 rounded-2xl bg-zinc-900/50 border border-white/10 hover:border-emerald-500/30 transition-all text-left"
+          >
+            <div className="text-3xl mb-2">{campus.icon}</div>
+            <h3 className="text-sm font-bold text-white mb-1">{campus.name}</h3>
+            <p className="text-[10px] text-zinc-400 mb-3">{campus.desc}</p>
+            <div className="flex items-center justify-between text-[9px]">
+              <span className="text-emerald-400 font-bold">Join →</span>
+              <span className="flex items-center gap-1 text-zinc-500">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                {campus.online}
+              </span>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Profile View Component
+function ProfileView({ 
+  displayName, email, isPremium, premiumUntil, onLogout, onEditProfile, showEditProfile,
+  setDisplayName, setGender, setMajor, setCountry, setCity, setUniversity,
+  gender, major, country, city, university,
+  availableCities, availableUniversities, onSave, onCancel
+}: any) {
+  if (showEditProfile) {
+    return (
+      <div className="h-full overflow-y-auto p-4 pb-8">
+        <div className="solid-panel rounded-2xl p-6">
+          <h2 className="text-xl font-bold text-white mb-4">Edit Profile</h2>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
+                Display Name
+              </label>
+              <input 
+                className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
+                value={displayName} 
+                onChange={(e) => setDisplayName(e.target.value)} 
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
+                  Gender
+                </label>
+                <select 
+                  className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
+                  value={gender} 
+                  onChange={(e) => setGender(e.target.value)}
+                >
+                  <option value="" disabled>Select</option>
+                  {GENDERS.map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
+                  Major
+                </label>
+                <select 
+                  className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
+                  value={major} 
+                  onChange={(e) => setMajor(e.target.value)}
+                >
+                  <option value="" disabled>Select</option>
+                  {MAJORS.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
+                Country
+              </label>
+              <select 
+                className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
+                value={country} 
+                onChange={(e) => setCountry(e.target.value)}
+              >
+                <option value="" disabled>Select Country</option>
+                {Object.keys(COUNTRIES_CITIES).sort().map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            
+            <div>
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
+                City
+              </label>
+              <select 
+                className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
+                value={city} 
+                onChange={(e) => setCity(e.target.value)}
+                disabled={!country}
+              >
+                <option value="" disabled>
+                  {country ? "Select City" : "Select Country First"}
+                </option>
+                {availableCities.map((c: string) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            
+            <div>
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
+                University (Optional)
+              </label>
+              <select 
+                className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
+                value={university} 
+                onChange={(e) => setUniversity(e.target.value)}
+                disabled={!country}
+              >
+                <option value="">Skip for now</option>
+                {availableUniversities.map((u: string) => (
+                  <option key={u} value={u}>{u}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex gap-2 mt-6">
+              <button 
+                onClick={onSave}
+                className="btn-emerald flex-1 rounded-xl py-3"
+              >
+                Save Changes
+              </button>
+              <button 
+                onClick={onCancel}
+                className="px-6 py-3 rounded-xl bg-zinc-800 text-white hover:bg-zinc-700"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-y-auto p-4 pb-8">
+      <div className="space-y-4">
+        {/* Profile Card */}
+        <div className="solid-panel rounded-2xl p-6 text-center">
+          <div className="w-16 h-16 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 mx-auto mb-3 flex items-center justify-center text-2xl font-bold text-white">
+            {displayName?.charAt(0)?.toUpperCase()}
+          </div>
+          <h2 className="text-xl font-bold text-white mb-1">{displayName}</h2>
+          <p className="text-xs text-zinc-500">{email}</p>
+        </div>
+        
+        {/* Premium Status */}
+        <div className={`solid-panel rounded-2xl p-6 ${isPremium ? "border-emerald-500/30" : ""}`}>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white">Premium Status</h3>
+            {isPremium ? (
+              <span className="px-2 py-1 bg-emerald-500/10 text-emerald-400 text-[10px] font-bold rounded-full border border-emerald-500/20">
+                ACTIVE
+              </span>
+            ) : (
+              <span className="px-2 py-1 bg-zinc-800 text-zinc-500 text-[10px] font-bold rounded-full">
+                FREE
+              </span>
+            )}
+          </div>
+          
+          {isPremium ? (
+            <p className="text-xs text-zinc-400">
+              Active until {premiumUntil?.toLocaleDateString()}
+            </p>
+          ) : (
+            <div>
+              <p className="text-xs text-zinc-400 mb-3">Unlock advanced filters, image uploads & more!</p>
+              <button 
+                onClick={() => toast("Stripe checkout coming soon!")}
+                className="btn-emerald w-full rounded-xl py-2 text-sm"
+              >
+                Upgrade for $3/week
+              </button>
+            </div>
+          )}
+        </div>
+        
+        {/* Settings */}
+        <div className="space-y-2">
+          <button 
+            onClick={onEditProfile}
+            className="w-full p-4 rounded-xl bg-zinc-900/50 border border-white/10 text-left text-sm text-white hover:bg-zinc-900/80 transition-colors"
+          >
+            Edit Profile
+          </button>
+          <button className="w-full p-4 rounded-xl bg-zinc-900/50 border border-white/10 text-left text-sm text-white hover:bg-zinc-900/80 transition-colors">
+            Restore Purchase
+          </button>
+          <button 
+            onClick={onLogout}
+            className="w-full p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-left text-sm text-red-400 hover:bg-red-500/20 transition-colors"
+          >
+            Log Out
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Landing Page Component (YOUR ORIGINAL)
 function LandingPage({ onLoginClick }: { onLoginClick: () => void }) {
   return (
     <div className="min-h-screen bg-black text-white selection:bg-emerald-500/30 overflow-x-hidden">
-      
       {/* 1. Navbar */}
       <nav className="fixed top-0 w-full z-50 border-b border-white/5 bg-black/50 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
@@ -947,13 +1596,11 @@ function LandingPage({ onLoginClick }: { onLoginClick: () => void }) {
 
       {/* 2. Hero Section */}
       <div className="relative pt-32 pb-20 sm:pt-40 sm:pb-24 overflow-hidden">
-        
         {/* Background Gradients */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[500px] bg-emerald-500/10 blur-[120px] rounded-full pointer-events-none" />
         <div className="absolute bottom-0 right-0 w-[800px] h-[600px] bg-blue-600/5 blur-[100px] rounded-full pointer-events-none" />
 
         <div className="max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-12 items-center relative z-10">
-          
           {/* Left: Text Content */}
           <div className="text-center lg:text-left">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold uppercase tracking-wider mb-6">
@@ -983,204 +1630,198 @@ function LandingPage({ onLoginClick }: { onLoginClick: () => void }) {
 
           {/* Right: Visual (Floating Chat Bubbles & Global Badges) */}
           <div className="relative h-[600px] hidden lg:block w-full">
-            
             {/* 📱 Mock Phone */}
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[350px] bg-zinc-900/80 backdrop-blur-xl border border-white/10 rounded-[2.5rem] p-5 shadow-2xl rotate-[-6deg] hover:rotate-0 transition-transform duration-700 ease-out z-20">
-                {/* Fake Header */}
-                <div className="flex items-center justify-between mb-6 px-2">
-                    <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-purple-500 to-pink-500 flex items-center justify-center text-lg">🦊</div>
-                        <div>
-                            <div className="h-2.5 w-24 bg-zinc-700 rounded-full mb-2"></div>
-                            <div className="h-2 w-16 bg-zinc-800 rounded-full"></div>
-                        </div>
-                    </div>
+              {/* Fake Header */}
+              <div className="flex items-center justify-between mb-6 px-2">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-purple-500 to-pink-500 flex items-center justify-center text-lg">🦊</div>
+                  <div>
+                    <div className="h-2.5 w-24 bg-zinc-700 rounded-full mb-2"></div>
+                    <div className="h-2 w-16 bg-zinc-800 rounded-full"></div>
+                  </div>
                 </div>
-                {/* Fake Messages */}
-                <div className="space-y-4">
-                    <div className="bg-zinc-800/50 p-4 rounded-2xl rounded-tl-none border border-white/5 text-sm text-zinc-300">
-                        Anyone doing CompSci at UTS? 💻
-                    </div>
-                    <div className="bg-emerald-600/20 p-4 rounded-2xl rounded-tr-none border border-emerald-500/20 text-sm text-emerald-100 ml-auto max-w-[85%]">
-                        Yo! I'm struggling with Data Structures rn 😭
-                    </div>
-                     <div className="bg-zinc-800/50 p-4 rounded-2xl rounded-tl-none border border-white/5 text-sm text-zinc-300">
-                        Haha same. Library study session?
-                    </div>
-                     <div className="bg-emerald-600/20 p-4 rounded-2xl rounded-tr-none border border-emerald-500/20 text-sm text-emerald-100 ml-auto max-w-[85%]">
-                        I'm down! Meet at level 7?
-                    </div>
+              </div>
+              {/* Fake Messages */}
+              <div className="space-y-4">
+                <div className="bg-zinc-800/50 p-4 rounded-2xl rounded-tl-none border border-white/5 text-sm text-zinc-300">
+                  Anyone doing CompSci at UTS? 💻
                 </div>
-                {/* Fake Input */}
-                <div className="mt-6 bg-black/40 h-14 rounded-2xl border border-white/5"></div>
+                <div className="bg-emerald-600/20 p-4 rounded-2xl rounded-tr-none border border-emerald-500/20 text-sm text-emerald-100 ml-auto max-w-[85%]">
+                  Yo! I'm struggling with Data Structures rn 😭
+                </div>
+                <div className="bg-zinc-800/50 p-4 rounded-2xl rounded-tl-none border border-white/5 text-sm text-zinc-300">
+                  Haha same. Library study session?
+                </div>
+                <div className="bg-emerald-600/20 p-4 rounded-2xl rounded-tr-none border border-emerald-500/20 text-sm text-emerald-100 ml-auto max-w-[85%]">
+                  I'm down! Meet at level 7?
+                </div>
+              </div>
+              {/* Fake Input */}
+              <div className="mt-6 bg-black/40 h-14 rounded-2xl border border-white/5"></div>
             </div>
 
             {/* 🌍 GLOBAL FLOATING BADGES */}
-            
             {/* Top Left - Harvard */}
             <div className="absolute top-10 left-0 animate-bounce [animation-delay:0s] z-10">
-                <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-red-500">
-                    <span>🎓</span> Harvard
-                </div>
+              <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-red-500">
+                <span>🎓</span> Harvard
+              </div>
             </div>
 
             {/* Top Right - Internships */}
             <div className="absolute top-20 right-[-20px] animate-pulse [animation-delay:1s] z-30">
-                <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-blue-500 shadow-xl">
-                    <span>💼</span> Tech Internships
-                </div>
+              <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-blue-500 shadow-xl">
+                <span>💼</span> Tech Internships
+              </div>
             </div>
 
             {/* Middle Left - Toronto */}
             <div className="absolute top-1/2 left-[-20px] animate-bounce [animation-delay:2s] z-30">
-                <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-red-400">
-                    <span>🇨🇦</span> Toronto
-                </div>
+              <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-red-400">
+                <span>🇨🇦</span> Toronto
+              </div>
             </div>
 
             {/* Middle Right - AI Club */}
             <div className="absolute top-[40%] right-[-10px] animate-pulse [animation-delay:1.5s] z-10">
-                <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-purple-500">
-                    <span>🤖</span> AI Club
-                </div>
+              <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-purple-500">
+                <span>🤖</span> AI Club
+              </div>
             </div>
 
             {/* Bottom Left - London */}
             <div className="absolute bottom-20 left-10 animate-bounce [animation-delay:3s] z-30">
-                <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-indigo-500">
-                    <span>🇬🇧</span> London
-                </div>
+              <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-indigo-500">
+                <span>🇬🇧</span> London
+              </div>
             </div>
 
             {/* Bottom Right - NYC */}
             <div className="absolute bottom-10 right-20 animate-pulse [animation-delay:0.5s] z-30">
-                <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-yellow-500">
-                    <span>🇺🇸</span> NYC
-                </div>
+              <div className="solid-panel px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border-l-4 border-l-yellow-500">
+                <span>🇺🇸</span> NYC
+              </div>
             </div>
-
           </div>
-
         </div>
       </div>
 
       {/* 3. Features Grid */}
       <div className="max-w-7xl mx-auto px-6 py-20 border-t border-white/5">
         <div className="grid md:grid-cols-3 gap-8">
-            {[
-                { icon: "🛡️", title: "Uni Verified", desc: "No randoms. We require a valid student email to ensure you're chatting with real peers." },
-                { icon: "🎭", title: "Truly Anonymous", desc: "Express yourself freely. No profiles, no history, no footprint. Just the vibe." },
-                { icon: "⚡", title: "Instant Match", desc: "Filter by University or go Global. Find your crowd in seconds." }
-            ].map((f, i) => (
-                <div key={i} className="p-6 rounded-2xl bg-zinc-900/30 border border-white/5 hover:border-emerald-500/30 transition-colors">
-                    <div className="text-4xl mb-4">{f.icon}</div>
-                    <h3 className="text-xl font-bold text-white mb-2">{f.title}</h3>
-                    <p className="text-zinc-400 text-sm leading-relaxed">{f.desc}</p>
-                </div>
-            ))}
+          {[
+            { icon: "🛡️", title: "Uni Verified", desc: "No randoms. We require a valid student email to ensure you're chatting with real peers." },
+            { icon: "🎭", title: "Truly Anonymous", desc: "Express yourself freely. No profiles, no history, no footprint. Just the vibe." },
+            { icon: "⚡", title: "Instant Match", desc: "Filter by University or go Global. Find your crowd in seconds." }
+          ].map((f, i) => (
+            <div key={i} className="p-6 rounded-2xl bg-zinc-900/30 border border-white/5 hover:border-emerald-500/30 transition-colors">
+              <div className="text-4xl mb-4">{f.icon}</div>
+              <h3 className="text-xl font-bold text-white mb-2">{f.title}</h3>
+              <p className="text-zinc-400 text-sm leading-relaxed">{f.desc}</p>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* 4. THE CAMPUSES (New Branded Section) */}
+      {/* 4. THE CAMPUSES */}
       <div className="py-24 relative overflow-hidden border-t border-white/5 bg-zinc-900/20">
-        
-        {/* Glow Effect */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-purple-500/10 blur-[150px] rounded-full pointer-events-none" />
 
         <div className="max-w-7xl mx-auto px-6 relative z-10">
-            <div className="text-center mb-16">
-                <h1 className="text-4xl md:text-5xl font-bold mb-6">Find Your <span className="text-emerald-400">Tribe</span>.</h1>
-                <h2 className="text-4xl md:text-5xl font-bold mb-6">Introducing our <span className="text-emerald-400">Campus</span> by Campchat</h2>
-                <p className="text-zinc-400 text-lg max-w-2xl mx-auto">
-                    Don't just chat 1-on-1. Jump into massive, dedicated group campuses for every aspect of university life.
-                </p>
+          <div className="text-center mb-16">
+            <h1 className="text-4xl md:text-5xl font-bold mb-6">Find Your <span className="text-emerald-400">Tribe</span>.</h1>
+            <h2 className="text-4xl md:text-5xl font-bold mb-6">Introducing our <span className="text-emerald-400">Campus</span> by Campchat</h2>
+            <p className="text-zinc-400 text-lg max-w-2xl mx-auto">
+              Don't just chat 1-on-1. Jump into massive, dedicated group campuses for every aspect of university life.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {/* Campus Social */}
+            <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-pink-500/50 transition-all duration-500 hover:-translate-y-2">
+              <div className="absolute inset-0 bg-gradient-to-br from-pink-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
+              <div className="relative z-10">
+                <div className="w-14 h-14 rounded-2xl bg-pink-500/10 border border-pink-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">🥂</div>
+                <h3 className="text-2xl font-bold text-white mb-2">Campus Social</h3>
+                <p className="text-zinc-400 text-sm mb-6">The digital pub. Chill vibes, banter, and making friends outside your degree.</p>
+                <div className="flex items-center justify-between border-t border-white/5 pt-4">
+                  <span className="text-xs font-bold text-pink-400 uppercase tracking-wider">Join Room →</span>
+                  <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 1.2k Online</span>
+                </div>
+              </div>
             </div>
 
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {/* Campus Social */}
-                <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-pink-500/50 transition-all duration-500 hover:-translate-y-2">
-                    <div className="absolute inset-0 bg-gradient-to-br from-pink-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
-                    <div className="relative z-10">
-                        <div className="w-14 h-14 rounded-2xl bg-pink-500/10 border border-pink-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">🥂</div>
-                        <h3 className="text-2xl font-bold text-white mb-2">Campus Social</h3>
-                        <p className="text-zinc-400 text-sm mb-6">The digital pub. Chill vibes, banter, and making friends outside your degree.</p>
-                        <div className="flex items-center justify-between border-t border-white/5 pt-4">
-                            <span className="text-xs font-bold text-pink-400 uppercase tracking-wider">Join Room →</span>
-                            <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 1.2k Online</span>
-                        </div>
-                    </div>
+            {/* Campus Career */}
+            <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-blue-500/50 transition-all duration-500 hover:-translate-y-2">
+              <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-cyan-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
+              <div className="relative z-10">
+                <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">💼</div>
+                <h3 className="text-2xl font-bold text-white mb-2">Campus Career</h3>
+                <p className="text-zinc-400 text-sm mb-6">Network & grind. Resume roasts, internship hunting, and corporate advice.</p>
+                <div className="flex items-center justify-between border-t border-white/5 pt-4">
+                  <span className="text-xs font-bold text-blue-400 uppercase tracking-wider">Join Room →</span>
+                  <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 850 Online</span>
                 </div>
-
-                {/* Campus Career */}
-                <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-blue-500/50 transition-all duration-500 hover:-translate-y-2">
-                    <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-cyan-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
-                    <div className="relative z-10">
-                        <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">💼</div>
-                        <h3 className="text-2xl font-bold text-white mb-2">Campus Career</h3>
-                        <p className="text-zinc-400 text-sm mb-6">Network & grind. Resume roasts, internship hunting, and corporate advice.</p>
-                        <div className="flex items-center justify-between border-t border-white/5 pt-4">
-                            <span className="text-xs font-bold text-blue-400 uppercase tracking-wider">Join Room →</span>
-                            <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 850 Online</span>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Campus Entrepreneur */}
-                <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-amber-500/50 transition-all duration-500 hover:-translate-y-2">
-                    <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-orange-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
-                    <div className="relative z-10">
-                        <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">🚀</div>
-                        <h3 className="text-2xl font-bold text-white mb-2">Campus Founder</h3>
-                        <p className="text-zinc-400 text-sm mb-6">The startup lab. Find co-founders, pitch ideas, and break things.</p>
-                        <div className="flex items-center justify-between border-t border-white/5 pt-4">
-                            <span className="text-xs font-bold text-amber-400 uppercase tracking-wider">Join Room →</span>
-                            <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 420 Online</span>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Campus International */}
-                <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-teal-500/50 transition-all duration-500 hover:-translate-y-2">
-                    <div className="absolute inset-0 bg-gradient-to-br from-teal-500/5 to-green-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
-                    <div className="relative z-10">
-                        <div className="w-14 h-14 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">🌏</div>
-                        <h3 className="text-2xl font-bold text-white mb-2">Campus Global</h3>
-                        <p className="text-zinc-400 text-sm mb-6">For international students. Home away from home, visa help, and culture swap.</p>
-                        <div className="flex items-center justify-between border-t border-white/5 pt-4">
-                            <span className="text-xs font-bold text-teal-400 uppercase tracking-wider">Join Room →</span>
-                            <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 3.1k Online</span>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Campus Sports */}
-                <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-red-500/50 transition-all duration-500 hover:-translate-y-2">
-                    <div className="absolute inset-0 bg-gradient-to-br from-red-500/5 to-rose-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
-                    <div className="relative z-10">
-                        <div className="w-14 h-14 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">⚽</div>
-                        <h3 className="text-2xl font-bold text-white mb-2">Campus Sports</h3>
-                        <p className="text-zinc-400 text-sm mb-6">The locker room. Match discussions, finding gym buddies, and team banter.</p>
-                        <div className="flex items-center justify-between border-t border-white/5 pt-4">
-                            <span className="text-xs font-bold text-red-400 uppercase tracking-wider">Join Room →</span>
-                            <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 950 Online</span>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Campus Study */}
-                <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-indigo-500/50 transition-all duration-500 hover:-translate-y-2">
-                    <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-violet-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
-                    <div className="relative z-10">
-                        <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">📚</div>
-                        <h3 className="text-2xl font-bold text-white mb-2">Campus Study</h3>
-                        <p className="text-zinc-400 text-sm mb-6">The quiet zone. Focus sessions, homework help, and exam prep groups.</p>
-                        <div className="flex items-center justify-between border-t border-white/5 pt-4">
-                            <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider">Join Room →</span>
-                            <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 1.5k Online</span>
-                        </div>
-                    </div>
-                </div>
+              </div>
             </div>
+
+            {/* Campus Entrepreneur */}
+            <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-amber-500/50 transition-all duration-500 hover:-translate-y-2">
+              <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-orange-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
+              <div className="relative z-10">
+                <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">🚀</div>
+                <h3 className="text-2xl font-bold text-white mb-2">Campus Founder</h3>
+                <p className="text-zinc-400 text-sm mb-6">The startup lab. Find co-founders, pitch ideas, and break things.</p>
+                <div className="flex items-center justify-between border-t border-white/5 pt-4">
+                  <span className="text-xs font-bold text-amber-400 uppercase tracking-wider">Join Room →</span>
+                  <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 420 Online</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Campus International */}
+            <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-teal-500/50 transition-all duration-500 hover:-translate-y-2">
+              <div className="absolute inset-0 bg-gradient-to-br from-teal-500/5 to-green-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
+              <div className="relative z-10">
+                <div className="w-14 h-14 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">🌏</div>
+                <h3 className="text-2xl font-bold text-white mb-2">Campus Global</h3>
+                <p className="text-zinc-400 text-sm mb-6">For international students. Home away from home, visa help, and culture swap.</p>
+                <div className="flex items-center justify-between border-t border-white/5 pt-4">
+                  <span className="text-xs font-bold text-teal-400 uppercase tracking-wider">Join Room →</span>
+                  <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 3.1k Online</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Campus Sports */}
+            <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-red-500/50 transition-all duration-500 hover:-translate-y-2">
+              <div className="absolute inset-0 bg-gradient-to-br from-red-500/5 to-rose-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
+              <div className="relative z-10">
+                <div className="w-14 h-14 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">⚽</div>
+                <h3 className="text-2xl font-bold text-white mb-2">Campus Sports</h3>
+                <p className="text-zinc-400 text-sm mb-6">The locker room. Match discussions, finding gym buddies, and team banter.</p>
+                <div className="flex items-center justify-between border-t border-white/5 pt-4">
+                  <span className="text-xs font-bold text-red-400 uppercase tracking-wider">Join Room →</span>
+                  <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 950 Online</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Campus Study */}
+            <div className="group relative p-8 rounded-3xl bg-black border border-white/10 hover:border-indigo-500/50 transition-all duration-500 hover:-translate-y-2">
+              <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-violet-500/5 opacity-0 group-hover:opacity-100 rounded-3xl transition-opacity duration-500"></div>
+              <div className="relative z-10">
+                <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform duration-300">📚</div>
+                <h3 className="text-2xl font-bold text-white mb-2">Campus Study</h3>
+                <p className="text-zinc-400 text-sm mb-6">The quiet zone. Focus sessions, homework help, and exam prep groups.</p>
+                <div className="flex items-center justify-between border-t border-white/5 pt-4">
+                  <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider">Join Room →</span>
+                  <span className="flex items-center gap-1.5 text-xs text-zinc-500"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 1.5k Online</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

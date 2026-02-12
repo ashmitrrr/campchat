@@ -1,12 +1,14 @@
+/* ⚠️ CRITICAL: Prevent iOS auto-zoom on inputs */
 html {
   scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
 }
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  /* Hex codes work better with Tailwind opacity modifiers */
   --background: #050505;
   --foreground: #fafafa;
 }
@@ -20,7 +22,21 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
-/* 🟢 The "Solid" Panel */
+/* 🔥 MOBILE INPUT FIX - Prevents iOS zoom on focus */
+.mobile-input {
+  font-size: 16px !important; /* iOS won't zoom if >= 16px */
+}
+
+/* Prevent viewport zoom on mobile */
+@media screen and (max-width: 768px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* Solid Panel */
 .solid-panel {
   @apply bg-zinc-900/80 border border-white/5 shadow-2xl backdrop-blur-md;
   box-shadow: 
@@ -28,7 +44,7 @@ body {
     0 20px 50px -12px rgba(0,0,0,0.9);
 }
 
-/* 🟢 Neon Button Effect */
+/* Emerald Button */
 .btn-emerald {
   @apply bg-emerald-600 text-white font-bold transition-all duration-200 border border-emerald-500/50;
   box-shadow: 0 4px 20px -5px rgba(16, 185, 129, 0.4);
@@ -44,7 +60,7 @@ body {
   @apply opacity-50 cursor-not-allowed transform-none shadow-none grayscale;
 }
 
-/* 🟢 Input Fields */
+/* Input Fields */
 .input-solid {
   @apply bg-zinc-900/50 border border-white/10 text-white placeholder-zinc-600 transition-all outline-none;
 }
@@ -53,7 +69,22 @@ body {
 }
 
 /* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar { width: 6px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { @apply bg-zinc-800 rounded-full; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { @apply bg-zinc-700; }
+
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { @apply bg-zinc-800 rounded-full; }
 ::-webkit-scrollbar-thumb:hover { @apply bg-zinc-700; }
+
+/* Fade in animation */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}

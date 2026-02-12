@@ -9,7 +9,11 @@ import jwt from "jsonwebtoken";
 
 const PORT = process.env.PORT || 8080;
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:3000";
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-this-in-production";
+if (!process.env.JWT_SECRET) {
+  throw new Error("❌ FATAL: JWT_SECRET environment variable is missing! Set it in .env file.");
+}
+const JWT_SECRET = process.env.JWT_SECRET;
+console.log("✅ JWT_SECRET loaded from environment");
 
 // Initialize Supabase Admin Client
 const supabase = createClient(
@@ -33,16 +37,17 @@ const io = new Server(server, {
 const queue = [];
 const socketToRoom = new Map();
 const roomToSockets = new Map();
-const roomPersistence = new Map(); // Store rooms for reconnection
+const roomPersistence = new Map();
 const blacklist = new Set();
 
 // RATE LIMITING STATE
-const messageRateLimits = new Map(); // email -> { count, resetTime }
-const reportRateLimits = new Map(); // email -> { count, resetTime }
+const messageRateLimits = new Map();
+const reportRateLimits = new Map();
 
 const MESSAGE_LIMIT = 30; // 30 messages per minute
 const REPORT_LIMIT = 3; // 3 reports per hour
 const ROOM_PERSISTENCE_TIME = 120000; // 2 minutes
+const MAX_MESSAGE_LENGTH = 500; // Character limit for messages
 
 // ---- RATE LIMITING HELPERS ----
 function checkRateLimit(limitMap, email, limit, windowMs) {
@@ -74,6 +79,51 @@ async function loadBans() {
 }
 loadBans();
 
+// ============== GIF API ROUTES ==============
+app.get("/api/gifs/search", async (req, res) => {
+  // 🔒 IMPROVEMENT #4: Guard against missing API key
+  if (!process.env.GIPHY_API_KEY) {
+    return res.status(500).json({ error: "GIPHY API key not configured" });
+  }
+
+  try {
+    const query = req.query.q;
+    
+    if (!query || query.trim() === "") {
+      return res.status(400).json({ error: "Query required" });
+    }
+    
+    const response = await fetch(
+      `https://api.giphy.com/v1/gifs/search?api_key=${process.env.GIPHY_API_KEY}&q=${encodeURIComponent(query)}&limit=20&rating=g`
+    );
+    
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error("GIF search error:", err);
+    res.status(500).json({ error: "Failed to search GIFs" });
+  }
+});
+
+app.get("/api/gifs/trending", async (req, res) => {
+  // 🔒 IMPROVEMENT #4: Guard against missing API key
+  if (!process.env.GIPHY_API_KEY) {
+    return res.status(500).json({ error: "GIPHY API key not configured" });
+  }
+
+  try {
+    const response = await fetch(
+      `https://api.giphy.com/v1/gifs/trending?api_key=${process.env.GIPHY_API_KEY}&limit=20&rating=g`
+    );
+    
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error("GIF trending error:", err);
+    res.status(500).json({ error: "Failed to load trending GIFs" });
+  }
+});
+
 // ---- JWT GENERATION ENDPOINT ----
 app.post("/api/generate-token", async (req, res) => {
   const { email } = req.body;
@@ -82,7 +132,6 @@ app.post("/api/generate-token", async (req, res) => {
     return res.status(400).json({ error: "Email required" });
   }
 
-  // Verify user session with Supabase (optional but recommended)
   const { data: { user }, error } = await supabase.auth.getUser(req.headers.authorization?.replace('Bearer ', ''));
   
   if (error || !user || user.email !== email) {
@@ -133,8 +182,12 @@ function tryMatch() {
       const p2 = queue[j];
 
       if (isCompatible(p1, p2)) {
-        queue.splice(j, 1);
-        queue.splice(i, 1);
+        // 🔒 IMPROVEMENT #3: Safer queue removal (prevents index mutation bugs)
+        const newQueue = queue.filter(
+          (s) => s.id !== p1.id && s.id !== p2.id
+        );
+        queue.length = 0;
+        queue.push(...newQueue);
 
         const roomId = `room_${crypto.randomUUID()}`;
         p1.join(roomId);
@@ -144,7 +197,6 @@ function tryMatch() {
         socketToRoom.set(p2.id, roomId);
         roomToSockets.set(roomId, [p1, p2]);
 
-        // Store for persistence
         roomPersistence.set(roomId, {
           users: [
             { socketId: p1.id, email: p1.email, ...p1.userData },
@@ -181,7 +233,7 @@ setInterval(() => {
       roomPersistence.delete(roomId);
     }
   }
-}, 30000); // Clean every 30 seconds
+}, 30000);
 
 // ---- BROADCAST ONLINE COUNT ----
 function broadcastOnlineCount() {
@@ -190,7 +242,6 @@ function broadcastOnlineCount() {
 
 io.on("connection", (socket) => {
   
-  // Handle profile data from client
   socket.on("set_profile", (profileData) => {
     socket.userData = {
       uni: profileData.uni || "Unknown",
@@ -202,14 +253,15 @@ io.on("connection", (socket) => {
       targetUni: profileData.targetUni || "Any",
     };
     
-    // Add to queue after profile is set
-    queue.push(socket);
+    // 🔒 IMPROVEMENT #1: Prevent duplicate queue entries
+    if (!queue.find((s) => s.id === socket.id)) {
+      queue.push(socket);
+    }
     tryMatch();
   });
 
   broadcastOnlineCount();
 
-  // Handle Preferences
   socket.on("update_preference", ({ targetUni }) => {
     if (socket.userData) {
       socket.userData.targetUni = targetUni;
@@ -217,7 +269,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Handle Waiting Pool
   socket.on("waiting", () => {
     if (!queue.find((s) => s.id === socket.id)) {
       queue.push(socket);
@@ -225,25 +276,39 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Handle Messaging with Rate Limit
+  // 🔒 IMPROVEMENT #2: Validate message content (CRITICAL)
   socket.on("send_message", ({ message, isGif }) => {
-  if (!checkRateLimit(messageRateLimits, socket.email, MESSAGE_LIMIT, 60000)) {
-    socket.emit("rate_limited", { type: "message" });
-    return;
-  }
+    // Validate message exists and is a string
+    if (!message || typeof message !== "string") return;
 
-  const roomId = socketToRoom.get(socket.id);
-  if (roomId) {
-    socket.broadcast.to(roomId).emit("message", { 
-      text: message, 
-      ts: Date.now(), 
-      from: "partner",
-      isGif: isGif || false  // ✅ Pass through the isGif flag
-    });
-  }
-});
+    const trimmed = message.trim();
+    
+    // Reject empty messages
+    if (trimmed.length === 0) return;
+    
+    // Reject overly long messages (prevents spam/abuse)
+    if (trimmed.length > MAX_MESSAGE_LENGTH) {
+      socket.emit("rate_limited", { type: "message_too_long" });
+      return;
+    }
 
-  // Handle Typing Events
+    // Rate limiting
+    if (!checkRateLimit(messageRateLimits, socket.email, MESSAGE_LIMIT, 60000)) {
+      socket.emit("rate_limited", { type: "message" });
+      return;
+    }
+
+    const roomId = socketToRoom.get(socket.id);
+    if (roomId) {
+      socket.broadcast.to(roomId).emit("message", { 
+        text: trimmed,
+        ts: Date.now(), 
+        from: "partner",
+        isGif: !!isGif // Force boolean
+      });
+    }
+  });
+
   socket.on("typing", ({ roomId }) => {
     socket.to(roomId).emit("typing");
   });
@@ -252,12 +317,10 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("stop_typing");
   });
 
-  // Get Online Count
   socket.on("get_online_count", () => {
     socket.emit("online_count", { count: io.engine.clientsCount });
   });
 
-  // REPORT SYSTEM with Rate Limit and DB
   socket.on("report_partner", async () => {
     if (!checkRateLimit(reportRateLimits, socket.email, REPORT_LIMIT, 3600000)) {
       socket.emit("rate_limited", { type: "report" });
@@ -274,7 +337,6 @@ io.on("connection", (socket) => {
       const reporterEmail = socket.email;
       const reportedEmail = partner.email;
       
-      // Log to DB
       await supabase.from("reports").insert({
         reporter_email: reporterEmail,
         reported_email: reportedEmail,
@@ -282,7 +344,6 @@ io.on("connection", (socket) => {
         reason: "User Report"
       });
 
-      // Get strike count from DB
       const { data: reports } = await supabase
         .from("reports")
         .select("*")
@@ -292,7 +353,6 @@ io.on("connection", (socket) => {
       
       console.log(`🚩 REPORT: ${reportedEmail} (Strikes: ${strikeCount})`);
 
-      // Check Threshold
       if (strikeCount >= 3) {
         blacklist.add(reportedEmail);
         await supabase.from("banned_users").insert({ 
@@ -310,7 +370,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // RECONNECTION LOGIC
   socket.on("reconnect_to_room", ({ roomId }) => {
     const persistedRoom = roomPersistence.get(roomId);
     if (persistedRoom) {
@@ -319,7 +378,6 @@ io.on("connection", (socket) => {
         socket.join(roomId);
         socketToRoom.set(socket.id, roomId);
         
-        // Update socket reference
         const sockets = roomToSockets.get(roomId) || [];
         const updatedSockets = sockets.map(s => 
           s.email === socket.email ? socket : s
@@ -337,7 +395,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // DISCONNECT
   socket.on("disconnect", () => {
     const idx = queue.findIndex((s) => s.id === socket.id);
     if (idx !== -1) queue.splice(idx, 1);
@@ -347,7 +404,6 @@ io.on("connection", (socket) => {
       socket.to(roomId).emit("partner_left");
       socketToRoom.delete(socket.id);
       
-      // Don't delete room immediately - keep for reconnection
       setTimeout(() => {
         const stillExists = Array.from(socketToRoom.values()).includes(roomId);
         if (!stillExists) {

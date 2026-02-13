@@ -88,3 +88,25 @@ body {
 .animate-fade-in {
   animation: fade-in 0.3s ease-out;
 }
+:root {
+  --vh: 1vh;
+}
+
+.h-screen {
+  height: 100vh;
+  height: calc(var(--vh, 1vh) * 100);
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.safe-bottom {
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+
+@media (max-width: 768px) {
+  .chat-container {
+    transition: height 0.3s ease-out;
+  }
+}

@@ -11,8 +11,23 @@ const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:8080"
 
 const MAJORS = ["Computer Science", "Business", "Engineering", "Medicine", "Arts", "Law", "Science", "Architecture", "Design", "Psychology", "Other"];
 const GENDERS = ["Male", "Female", "Non-binary", "Prefer not to say"];
-
+function useMobileKeyboard() {
+  useEffect(() => {
+    const setVH = () => {
+      const vh = window.visualViewport?.height || window.innerHeight;
+      document.documentElement.style.setProperty('--vh', `${vh * 0.01}px`);
+    };
+    setVH();
+    window.visualViewport?.addEventListener('resize', setVH);
+    window.addEventListener('resize', setVH);
+    return () => {
+      window.visualViewport?.removeEventListener('resize', setVH);
+      window.removeEventListener('resize', setVH);
+    };
+  }, []);
+}
 export default function Home() {
+  useMobileKeyboard();
   // ---- AUTH & USER STATE ----
   const [user, setUser] = useState<any>(null);
   const [jwtToken, setJwtToken] = useState<string | null>(null);
@@ -482,7 +497,9 @@ const loadTrendingGifs = async () => {
   if (!pendingImage || !socket || !roomId) return;
   
   setShowTimerModal(false);
-  toast("Uploading image...");
+  const toastId = toast.loading("Uploading image...", {
+    duration: Infinity
+  });
   
   const fileName = `${user.email}-${Date.now()}-${pendingImage.name}`;
   const { data, error } = await supabase.storage
@@ -490,7 +507,7 @@ const loadTrendingGifs = async () => {
     .upload(fileName, pendingImage);
   
   if (error) {
-    toast.error("Upload failed!");
+    toast.error("Upload failed!", { id: toastId });
     setPendingImage(null);
     return;
   }
@@ -520,7 +537,7 @@ const loadTrendingGifs = async () => {
       fileName: fileName
     });
     
-    toast.success("Image sent!");
+    toast.success("Image sent!", { id: toastId });
     setPendingImage(null);
   }
 };
@@ -1142,13 +1159,13 @@ const handleVerifyCode = async () => {
 // Mobile Navbar
 function MobileNavbar({ onlineCount, onLogout }: { onlineCount: number; onLogout: (() => void) | null }) {
   return (
-    <nav className="w-full h-14 border-b border-white/5 bg-black/95 backdrop-blur-md flex items-center justify-between px-4 shrink-0 z-50">
-      <div className="flex items-center gap-2">
-        <img src="/logo.png" alt="Logo" className="w-8 h-8 object-contain" />
-        <span className="font-bold text-white text-sm tracking-tight">CampChat</span>
+    <nav className="w-full h-14 border-b border-white/5 bg-black/95 backdrop-blur-md flex items-center justify-between px-3 sm:px-4 shrink-0 z-50">
+      <div className="flex items-center gap-1.5 sm:gap-2">
+        <img src="/logo.png" alt="Logo" className="w-7 h-7 sm:w-8 sm:h-8 object-contain" />
+        <span className="font-bold text-white text-xs sm:text-sm tracking-tight">CampChat</span>
       </div>
       
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3">
         {onlineCount > 0 && (
           <div className="flex items-center gap-1.5 px-2 py-1 bg-zinc-900 rounded-full border border-white/10">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -1258,7 +1275,7 @@ function StartChatView({
           </div>
 
           {/* Filter: Country */}
-          <div className={`p-4 rounded-xl border transition-all ${
+          <div className={`p-3 rounded-xl border transition-all ${
             isPremium 
               ? 'bg-emerald-500/5 border-emerald-500/20' 
               : 'bg-zinc-900/30 border-zinc-800 opacity-50'
@@ -1394,7 +1411,7 @@ function ChatView(props: any) {  // ✅ CORRECT // Add onEndChat here
       </div>
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-black/20">
+      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-black/20 pb-safe">
         {props.messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center text-zinc-600">
             <div className="mb-3 rounded-full bg-zinc-900 p-4 border border-white/5">
@@ -1450,7 +1467,7 @@ function ChatView(props: any) {  // ✅ CORRECT // Add onEndChat here
       </div>
 
       {/* Input Area */}
-      <div className="p-3 bg-zinc-900/80 backdrop-blur-md border-t border-white/5 shrink-0">
+      <div className="p-3 bg-zinc-900/80 backdrop-blur-md border-t border-white/5 shrink-0 safe-bottom">
         <div className="flex gap-2">
           <button
             onClick={() => {
@@ -1499,7 +1516,15 @@ function ChatView(props: any) {  // ✅ CORRECT // Add onEndChat here
             placeholder={props.roomId ? "Type..." : "Waiting..."} 
             value={props.input} 
             onChange={props.onTyping} 
-            onKeyDown={(e) => e.key === "Enter" && props.onSendMessage()} 
+            onKeyDown={(e) => e.key === "Enter" && props.onSendMessage()}
+            onFocus={() => {
+              setTimeout(() => {
+                props.messagesEndRef.current?.scrollIntoView({ 
+                  behavior: "smooth", 
+                  block: "end" 
+                });
+              }, 300);
+            }}
             disabled={!props.roomId} 
           />
           <button 

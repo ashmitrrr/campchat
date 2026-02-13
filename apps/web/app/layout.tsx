@@ -49,8 +49,10 @@ export const metadata = {
   viewport: {
     width: "device-width",
     initialScale: 1,
-    maximumScale: 1, // Prevents pinch zoom
-    userScalable: false, // Prevents zoom
+    maximumScale: 1,
+    userScalable: false,
+    viewportFit: "cover",
+    interactiveWidget: "resizes-content", // ✅ CRITICAL for Android
   },
 };
 
@@ -62,6 +64,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+         <meta name="theme-color" content="#000000" />
       </head>
       <body className="min-h-screen bg-black text-white">{children}</body>
     </html>

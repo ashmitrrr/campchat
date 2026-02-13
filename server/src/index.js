@@ -168,8 +168,22 @@ io.use((socket, next) => {
 
 // ---- MATCHING LOGIC ----
 function isCompatible(userA, userB) {
-  if (userA.targetUni !== "Any" && userA.targetUni !== userB.uni) return false;
-  if (userB.targetUni !== "Any" && userB.targetUni !== userA.uni) return false;
+  // Check all filters from both users
+  const filtersA = userA.filters || {};
+  const filtersB = userB.filters || {};
+  
+  // Check User A's filters against User B
+  if (filtersA.gender && filtersA.gender !== "Any" && filtersA.gender !== userB.gender) return false;
+  if (filtersA.country && filtersA.country !== "Any" && filtersA.country !== userB.country) return false;
+  if (filtersA.uni && filtersA.uni !== "Any" && filtersA.uni !== userB.uni) return false;
+  if (filtersA.major && filtersA.major !== "Any" && filtersA.major !== userB.major) return false;
+  
+  // Check User B's filters against User A
+  if (filtersB.gender && filtersB.gender !== "Any" && filtersB.gender !== userA.gender) return false;
+  if (filtersB.country && filtersB.country !== "Any" && filtersB.country !== userA.country) return false;
+  if (filtersB.uni && filtersB.uni !== "Any" && filtersB.uni !== userA.uni) return false;
+  if (filtersB.major && filtersB.major !== "Any" && filtersB.major !== userA.major) return false;
+  
   return true;
 }
 
@@ -243,15 +257,20 @@ function broadcastOnlineCount() {
 io.on("connection", (socket) => {
   
   socket.on("set_profile", (profileData) => {
-    socket.userData = {
-      uni: profileData.uni || "Unknown",
-      name: profileData.name || "Stranger",
-      gender: profileData.gender || "Hidden",
-      major: profileData.major || "Undecided",
-      country: profileData.country || "Unknown",
-      city: profileData.city || "Unknown",
-      targetUni: profileData.targetUni || "Any",
-    };
+  socket.userData = {
+    uni: profileData.uni || "Unknown",
+    name: profileData.name || "Stranger",
+    gender: profileData.gender || "Hidden",
+    major: profileData.major || "Undecided",
+    country: profileData.country || "Unknown",
+    city: profileData.city || "Unknown",
+    filters: profileData.filters || {
+      gender: "Any",
+      country: "Any",
+      uni: "Any",
+      major: "Any"
+    }
+  };
     
     // 🔒 IMPROVEMENT #1: Prevent duplicate queue entries
     if (!queue.find((s) => s.id === socket.id)) {
@@ -277,7 +296,7 @@ io.on("connection", (socket) => {
   });
 
   // 🔒 IMPROVEMENT #2: Validate message content (CRITICAL)
-  socket.on("send_message", ({ message, isGif }) => {
+  socket.on("send_message", ({ message, isGif, isImage, isBlurred, timerSeconds, fileName }) => {
     // Validate message exists and is a string
     if (!message || typeof message !== "string") return;
 
@@ -304,11 +323,14 @@ io.on("connection", (socket) => {
         text: trimmed,
         ts: Date.now(), 
         from: "partner",
-        isGif: !!isGif // Force boolean
+        isGif: !!isGif,
+        isImage: !!isImage,
+        isBlurred: !!isBlurred,
+        timerSeconds: timerSeconds || 0,
+        fileName: fileName || ""
       });
     }
   });
-
   socket.on("typing", ({ roomId }) => {
     socket.to(roomId).emit("typing");
   });

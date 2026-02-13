@@ -45,6 +45,11 @@ export default function Home() {
   const [otpInput, setOtpInput] = useState("");
   const [showOtpInput, setShowOtpInput] = useState(false);
   const [loading, setLoading] = useState(false);
+  // Filter States
+  const [filterGender, setFilterGender] = useState("Any");
+  const [filterCountry, setFilterCountry] = useState("Any");
+  const [filterUni, setFilterUni] = useState("Any");
+  const [filterMajor, setFilterMajor] = useState("Any");
   
   // Chat State
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -67,10 +72,16 @@ export default function Home() {
   const [gifs, setGifs] = useState<any[]>([]);
   const [isSearchingGifs, setIsSearchingGifs] = useState(false);
 
+  // Disappearing image states
+  const [showTimerModal, setShowTimerModal] = useState(false);
+  const [pendingImage, setPendingImage] = useState<File | null>(null);
+  const [imageTimers, setImageTimers] = useState<Map<string, NodeJS.Timeout>>(new Map());
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [messageTimers, setMessageTimers] = useState<Map<number, NodeJS.Timeout>>(new Map());
 
   // CHECK SESSION & LOAD PROFILE
   useEffect(() => {
@@ -187,6 +198,8 @@ export default function Home() {
         university: university,
         uni_name: uniName,
         updated_at: new Date().toISOString()
+      }, {
+        onConflict: 'email'  
       });
     
     if (error) {
@@ -253,7 +266,13 @@ export default function Home() {
         major: major,
         country: country,
         city: city,
-        targetUni: targetUniFilter,
+        // Send filter preferences
+        filters: {
+          gender: filterGender,
+          country: filterCountry,
+          uni: filterUni,
+          major: filterMajor
+        }
       });
       
       s.emit("get_online_count");
@@ -340,6 +359,29 @@ export default function Home() {
       s.disconnect();
     };
   }, [isReadyToChat, user, jwtToken, targetUniFilter]);
+  // Auto-delete messages after 2 minutes (SEPARATE)
+  useEffect(() => {
+    messages.forEach((msg, index) => {
+      const msgKey = msg.ts;
+      
+      if (messageTimers.has(msgKey)) return;
+      
+      const timer = setTimeout(() => {
+        setMessages(prev => prev.filter(m => m.ts !== msgKey));
+        setMessageTimers(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(msgKey);
+          return newMap;
+        });
+      }, 120000);
+      
+      setMessageTimers(prev => new Map(prev).set(msgKey, timer));
+    });
+  
+  return () => {
+    messageTimers.forEach(timer => clearTimeout(timer));
+  };
+}, [messages]);
 
   // Search GIFs
   // Search GIFs
@@ -347,16 +389,30 @@ const searchGifs = async (query: string) => {
   if (!query.trim()) return;
   setIsSearchingGifs(true);
   try {
+    console.log('🔍 Searching GIFs for:', query); // DEBUG
     const response = await fetch(
       `${SERVER_URL}/api/gifs/search?q=${encodeURIComponent(query)}`
     );
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
     const data = await response.json();
-    setGifs(data.data || []);
+    console.log('✅ GIF Response:', data); // DEBUG
+    
+    if (data.data && Array.isArray(data.data)) {
+      setGifs(data.data);
+    } else {
+      console.error('Invalid GIF response:', data);
+      toast.error("Invalid GIF data received");
+    }
   } catch (err) {
-    console.error('GIF search failed:', err);
-    toast.error("Failed to load GIFs");
+    console.error('❌ GIF search failed:', err);
+    toast.error("Failed to load GIFs - check console");
+  } finally {
+    setIsSearchingGifs(false);
   }
-  setIsSearchingGifs(false);
 };
 
   // Load trending GIFs
@@ -364,15 +420,28 @@ const searchGifs = async (query: string) => {
 const loadTrendingGifs = async () => {
   setIsSearchingGifs(true);
   try {
+    console.log('🔥 Loading trending GIFs'); // DEBUG
     const response = await fetch(
       `${SERVER_URL}/api/gifs/trending`
     );
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
     const data = await response.json();
-    setGifs(data.data || []);
+    console.log('✅ Trending GIFs:', data); // DEBUG
+    
+    if (data.data && Array.isArray(data.data)) {
+      setGifs(data.data);
+    } else {
+      console.error('Invalid GIF response:', data);
+    }
   } catch (err) {
-    console.error('GIF load failed:', err);
+    console.error('❌ Trending GIFs failed:', err);
+  } finally {
+    setIsSearchingGifs(false);
   }
-  setIsSearchingGifs(false);
 };
   // Send GIF
   const sendGif = (gifUrl: string) => {
@@ -387,47 +456,97 @@ const loadTrendingGifs = async () => {
 
   // Handle Image Upload (Premium Only)
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!isPremium) {
-      showPremiumPaywall();
-      return;
-    }
+  if (!isPremium) {
+    showPremiumPaywall();
+    return;
+  }
+  
+  const file = e.target.files?.[0];
+  if (!file) return;
+  
+  if (file.size > 5 * 1024 * 1024) {
+    toast.error("Image too large! Max 5MB");
+    return;
+  }
+  
+  if (!['image/jpeg', 'image/png', 'image/gif'].includes(file.type)) {
+    toast.error("Only JPG, PNG, GIF allowed");
+    return;
+  }
+  
+  // Store pending image and show timer modal
+  setPendingImage(file);
+  setShowTimerModal(true);
+};
+ const sendImageWithTimer = async (timerSeconds: number) => {
+  if (!pendingImage || !socket || !roomId) return;
+  
+  setShowTimerModal(false);
+  toast("Uploading image...");
+  
+  const fileName = `${user.email}-${Date.now()}-${pendingImage.name}`;
+  const { data, error } = await supabase.storage
+    .from('chat-images')
+    .upload(fileName, pendingImage);
+  
+  if (error) {
+    toast.error("Upload failed!");
+    setPendingImage(null);
+    return;
+  }
+  
+  const { data: urlData } = supabase.storage
+    .from('chat-images')
+    .getPublicUrl(fileName);
+  
+  if (urlData) {
+    const imageUrl = urlData.publicUrl;
+    const msg = { 
+      text: imageUrl, 
+      ts: Date.now(), 
+      from: "me" as const, 
+      isImage: true,
+      isBlurred: true,
+      timerSeconds: timerSeconds,
+      fileName: fileName
+    };
     
-    const file = e.target.files?.[0];
-    if (!file) return;
+    setMessages((prev) => [...prev, msg]);
+    socket.emit("send_message", { 
+      message: imageUrl, 
+      isImage: true, 
+      isBlurred: true,
+      timerSeconds: timerSeconds,
+      fileName: fileName
+    });
     
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("Image too large! Max 5MB");
-      return;
-    }
-    
-    if (!['image/jpeg', 'image/png', 'image/gif'].includes(file.type)) {
-      toast.error("Only JPG, PNG, GIF allowed");
-      return;
-    }
-    
-    toast("Uploading image...");
-    
-    const fileName = `${user.email}-${Date.now()}-${file.name}`;
-    const { data, error } = await supabase.storage
+    toast.success("Image sent!");
+    setPendingImage(null);
+  }
+};
+const handleImageClick = (imageUrl: string, fileName: string, timerSeconds: number) => {
+  // Unblur image
+  setMessages(prev => prev.map(msg => 
+    msg.text === imageUrl 
+      ? { ...msg, isBlurred: false } 
+      : msg
+  ));
+  
+  // Start deletion timer
+  const timer = setTimeout(async () => {
+    // Delete from Supabase
+    await supabase.storage
       .from('chat-images')
-      .upload(fileName, file);
+      .remove([fileName]);
     
-    if (error) {
-      toast.error("Upload failed!");
-      return;
-    }
+    // Remove from messages
+    setMessages(prev => prev.filter(msg => msg.text !== imageUrl));
     
-    const { data: urlData } = supabase.storage
-      .from('chat-images')
-      .getPublicUrl(fileName);
-    
-    if (urlData) {
-      const msg = { text: urlData.publicUrl, ts: Date.now(), from: "me" as const, isImage: true };
-      setMessages((prev) => [...prev, msg]);
-      socket?.emit("send_message", { message: urlData.publicUrl, isImage: true });
-      toast.success("Image sent!");
-    }
-  };
+    toast("Image deleted", { icon: "🔥" });
+  }, timerSeconds * 1000);
+  
+  setImageTimers(prev => new Map(prev).set(imageUrl, timer));
+};
 
   // Show Premium Paywall
   const showPremiumPaywall = () => {
@@ -909,6 +1028,15 @@ const handleVerifyCode = async () => {
       <div className="flex flex-col h-screen bg-black overflow-hidden">
         <MobileNavbar onlineCount={onlineCount} onLogout={handleLogout} />
         <Toaster position="top-center" richColors theme="dark" />
+        {showTimerModal && (
+          <TimerModal 
+            onClose={() => {
+              setShowTimerModal(false);
+              setPendingImage(null);
+            }}
+            onSelectTimer={sendImageWithTimer}
+          />
+        )}
         
         {/* MAIN CONTENT AREA */}
         <div className="flex-1 overflow-hidden pb-16">
@@ -945,15 +1073,23 @@ const handleVerifyCode = async () => {
                 showPremiumPaywall={showPremiumPaywall}
                 setGifSearch={setGifSearch}
                 onEndChat={() => setIsReadyToChat(false)} 
+                onHandleImageClick={handleImageClick} 
               />
             ) : (
               <StartChatView 
                 isPremium={isPremium}
-                targetUniFilter={targetUniFilter}
-                setTargetUniFilter={setTargetUniFilter}
+                filterGender={filterGender}
+                setFilterGender={setFilterGender}
+                filterCountry={filterCountry}
+                setFilterCountry={setFilterCountry}
+                filterUni={filterUni}
+                setFilterUni={setFilterUni}
+                filterMajor={filterMajor}
+                setFilterMajor={setFilterMajor}
                 onStartChat={() => setIsReadyToChat(true)}
                 showPremiumPaywall={showPremiumPaywall}
                 availableUniversities={availableUniversities}
+                availableCities={availableCities}
               />
             )
           )}
@@ -1070,28 +1206,101 @@ function BottomTabBar({ activeTab, onTabChange }: { activeTab: string; onTabChan
 }
 
 // START CHAT VIEW (New - with Premium Matching)
-function StartChatView({ isPremium, targetUniFilter, setTargetUniFilter, onStartChat, showPremiumPaywall, availableUniversities }: any) {
+function StartChatView({ 
+  isPremium, 
+  filterGender, setFilterGender,
+  filterCountry, setFilterCountry,
+  filterUni, setFilterUni,
+  filterMajor, setFilterMajor,
+  onStartChat, 
+  showPremiumPaywall, 
+  availableUniversities,
+  availableCities 
+}: any) {
   return (
-    <div className="h-full flex flex-col items-center justify-center p-4 bg-black/20">
-      <div className="solid-panel w-full max-w-md rounded-2xl p-8 text-center">
+    <div className="h-full flex flex-col items-center justify-center p-4 bg-black/20 overflow-y-auto">
+      <div className="solid-panel w-full max-w-md rounded-2xl p-6 text-center my-auto">
         <div className="mb-6">
           <div className="inline-block rounded-full bg-emerald-500/10 p-6 border border-emerald-500/20 mb-4">
             <span className="text-5xl">💬</span>
           </div>
           <h2 className="text-2xl font-bold text-white mb-2">Ready to Chat?</h2>
-          <p className="text-sm text-zinc-400">Choose your matching preference</p>
+          <p className="text-sm text-zinc-400">Choose your matching preferences</p>
         </div>
 
-        {/* Premium Filters (if premium) */}
-        {isPremium && (
-          <div className="mb-6 p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20">
-            <label className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-2 block">
-              Filter by University
-            </label>
+        {/* FILTERS SECTION */}
+        <div className="space-y-2 mb-4 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar">
+          
+          {/* Filter: Gender */}
+          <div className={`p-3 rounded-xl border transition-all ${
+            isPremium 
+              ? 'bg-emerald-500/5 border-emerald-500/20' 
+              : 'bg-zinc-900/30 border-zinc-800 opacity-50'
+          }`}>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                Filter by Gender
+              </label>
+              {!isPremium && <span className="text-xs">🔒</span>}
+            </div>
             <select 
-              className="mobile-input input-solid w-full rounded-xl p-3" 
-              value={targetUniFilter} 
-              onChange={(e) => setTargetUniFilter(e.target.value)}
+              className="mobile-input input-solid w-full rounded-xl p-3 text-sm" 
+              value={filterGender} 
+              onChange={(e) => isPremium ? setFilterGender(e.target.value) : showPremiumPaywall()}
+              disabled={!isPremium}
+              onClick={() => !isPremium && showPremiumPaywall()}
+            >
+              <option value="Any">Any Gender</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Non-binary">Non-binary</option>
+            </select>
+          </div>
+
+          {/* Filter: Country */}
+          <div className={`p-4 rounded-xl border transition-all ${
+            isPremium 
+              ? 'bg-emerald-500/5 border-emerald-500/20' 
+              : 'bg-zinc-900/30 border-zinc-800 opacity-50'
+          }`}>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                Filter by Country
+              </label>
+              {!isPremium && <span className="text-xs">🔒</span>}
+            </div>
+            <select 
+              className="mobile-input input-solid w-full rounded-xl p-3 text-sm" 
+              value={filterCountry} 
+              onChange={(e) => isPremium ? setFilterCountry(e.target.value) : showPremiumPaywall()}
+              disabled={!isPremium}
+              onClick={() => !isPremium && showPremiumPaywall()}
+            >
+              <option value="Any">Any Country</option>
+              {Object.keys(COUNTRIES_CITIES).sort().map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Filter: University */}
+          <div className={`p-4 rounded-xl border transition-all ${
+            isPremium 
+              ? 'bg-emerald-500/5 border-emerald-500/20' 
+              : 'bg-zinc-900/30 border-zinc-800 opacity-50'
+          }`}>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                Filter by University
+              </label>
+              {!isPremium && <span className="text-xs">🔒</span>}
+            </div>
+            <select 
+              className="mobile-input input-solid w-full rounded-xl p-3 text-sm" 
+              value={filterUni} 
+              onChange={(e) => isPremium ? setFilterUni(e.target.value) : showPremiumPaywall()}
+              disabled={!isPremium}
+              onClick={() => !isPremium && showPremiumPaywall()}
             >
               <option value="Any">Any University</option>
               {availableUniversities.map((u: string) => (
@@ -1099,29 +1308,32 @@ function StartChatView({ isPremium, targetUniFilter, setTargetUniFilter, onStart
               ))}
             </select>
           </div>
-        )}
 
-        {/* Free User - Show Locked Premium */}
-        {!isPremium && (
-          <div className="mb-6">
-            <button 
-              onClick={showPremiumPaywall}
-              className="w-full p-4 rounded-xl bg-zinc-900/50 border border-white/10 hover:border-emerald-500/30 transition-all text-left group relative overflow-hidden"
+          {/* Filter: Major */}
+          <div className={`p-4 rounded-xl border transition-all ${
+            isPremium 
+              ? 'bg-emerald-500/5 border-emerald-500/20' 
+              : 'bg-zinc-900/30 border-zinc-800 opacity-50'
+          }`}>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                Filter by Major
+              </label>
+              {!isPremium && <span className="text-xs">🔒</span>}
+            </div>
+            <select 
+              className="mobile-input input-solid w-full rounded-xl p-3 text-sm" 
+              value={filterMajor} 
+              onChange={(e) => isPremium ? setFilterMajor(e.target.value) : showPremiumPaywall()}
+              disabled={!isPremium}
+              onClick={() => !isPremium && showPremiumPaywall()}
             >
-              <div className="absolute top-2 right-2 px-2 py-1 bg-emerald-500/10 text-emerald-400 text-[10px] font-bold rounded-full border border-emerald-500/20">
-                PREMIUM
-              </div>
-              <div className="flex items-center gap-3 opacity-50 group-hover:opacity-100 transition-opacity">
-                <span className="text-2xl">🎯</span>
-                <div>
-                  <h3 className="text-sm font-bold text-white">Premium Matching</h3>
-                  <p className="text-xs text-zinc-400">Filter by university, gender, major</p>
-                </div>
-                <span className="ml-auto text-xl">🔒</span>
-              </div>
-            </button>
+              <option value="Any">Any Major</option>
+              {MAJORS.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
           </div>
-        )}
+
+        </div>
 
         <button 
           onClick={onStartChat}
@@ -1194,8 +1406,28 @@ function ChatView(props: any) {  // ✅ CORRECT // Add onEndChat here
         {props.messages.map((m: any, i: number) => (
           <div key={i} className={`flex flex-col ${m.from === "me" ? "items-end" : "items-start"}`}>
             <div className={`max-w-[85%] rounded-2xl overflow-hidden shadow-sm ${m.from === "me" ? "bg-emerald-600 text-white rounded-tr-none" : "bg-zinc-800 text-zinc-200 rounded-tl-none border border-white/5"}`}>
-              {m.isGif || m.isImage ? (
-                <img src={m.text} alt="Media" className="max-w-full rounded-2xl" />
+              {m.isGif ? (
+                <img src={m.text} alt="GIF" className="max-w-full rounded-2xl" />
+              ) : m.isImage ? (
+                <div 
+                  className="relative cursor-pointer"
+                  onClick={() => m.isBlurred && props.onHandleImageClick(m.text, m.fileName, m.timerSeconds)}
+                >
+                  <img 
+                    src={m.text} 
+                    alt="Image" 
+                    className={`max-w-full rounded-2xl transition-all ${
+                      m.isBlurred ? 'blur-xl' : ''
+                    }`}
+                  />
+                  {m.isBlurred && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="bg-black/70 px-4 py-2 rounded-full text-white text-sm font-bold">
+                        Tap to view • {m.timerSeconds}s
+                      </div>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="px-3 py-2 text-sm">{m.text}</div>
               )}
@@ -1340,7 +1572,45 @@ function ChatView(props: any) {  // ✅ CORRECT // Add onEndChat here
     </div>
   );
 }
-
+// Timer Selection Modal Component
+function TimerModal({ onClose, onSelectTimer }: { onClose: () => void; onSelectTimer: (seconds: number) => void }) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
+      <div className="solid-panel w-full max-w-sm rounded-2xl p-6 text-center">
+        <h3 className="text-xl font-bold text-white mb-2">Choose Timer</h3>
+        <p className="text-sm text-zinc-400 mb-6">Image will disappear after:</p>
+        
+        <div className="space-y-3">
+          <button 
+            onClick={() => onSelectTimer(10)}
+            className="w-full py-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition-all"
+          >
+            10 Seconds ⚡
+          </button>
+          <button 
+            onClick={() => onSelectTimer(30)}
+            className="w-full py-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold transition-all"
+          >
+            30 Seconds ⏱️
+          </button>
+          <button 
+            onClick={() => onSelectTimer(60)}
+            className="w-full py-4 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold transition-all"
+          >
+            60 Seconds 🕐
+          </button>
+        </div>
+        
+        <button 
+          onClick={onClose}
+          className="mt-4 text-sm text-zinc-500 hover:text-white"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
 // Campuses View Component
 function CampusesView() {
   const campuses = [

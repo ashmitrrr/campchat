@@ -54,6 +54,12 @@ export default function Home() {
   const [uniName, setUniName] = useState("");
   const [availableCities, setAvailableCities] = useState<string[]>([]);
   const [availableUniversities, setAvailableUniversities] = useState<string[]>([]);
+
+  // Profile Picture State
+  const [profilePic, setProfilePic] = useState<string | null>(null);
+
+  // Chat Theme State (1-5, 1&2 free, 3-5 premium)
+  const [chatTheme, setChatTheme] = useState<number>(1);
   
   // Premium State
   const [isPremium, setIsPremium] = useState(false);
@@ -78,7 +84,7 @@ export default function Home() {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [status, setStatus] = useState("Idle");
   const [roomId, setRoomId] = useState<string | null>(null);
-  const [partnerInfo, setPartnerInfo] = useState<{ uni: string; name: string; country: string } | null>(null);
+  const [partnerInfo, setPartnerInfo] = useState<{ uni: string; name: string; country: string; profilePic?: string } | null>(null);
   const [messages, setMessages] = useState<{ text: string; ts: number; from: "me" | "partner"; isGif?: boolean; isImage?: boolean }[]>([]);
   const [input, setInput] = useState("");
   const [isPartnerTyping, setIsPartnerTyping] = useState(false);
@@ -114,7 +120,6 @@ export default function Home() {
         setUser(data.session.user);
         const hasProfile = await loadUserProfile(data.session.user.email);
         await generateJWT(data.session);
-        
         if (hasProfile) {
           setCurrentView("terms");
         } else {
@@ -129,7 +134,6 @@ export default function Home() {
         setUser(session.user);
         const hasProfile = await loadUserProfile(session.user.email);
         await generateJWT(session);
-        
         if (hasProfile) {
           setCurrentView("terms");
         } else {
@@ -180,6 +184,8 @@ export default function Home() {
       setCity(data.city || "");
       setUniversity(data.university || "");
       setUniName(data.uni_name || "");
+      if (data.profile_pic) setProfilePic(data.profile_pic);
+      if (data.chat_theme) setChatTheme(data.chat_theme);
       
       // Check premium status
       if (data.premium_until) {
@@ -189,12 +195,8 @@ export default function Home() {
       }
       
       if (data.country) {
-        if (COUNTRIES_CITIES[data.country]) {
-          setAvailableCities(COUNTRIES_CITIES[data.country]);
-        }
-        if (UNIVERSITIES_BY_COUNTRY[data.country]) {
-          setAvailableUniversities(UNIVERSITIES_BY_COUNTRY[data.country]);
-        }
+        if (COUNTRIES_CITIES[data.country]) setAvailableCities(COUNTRIES_CITIES[data.country]);
+        if (UNIVERSITIES_BY_COUNTRY[data.country]) setAvailableUniversities(UNIVERSITIES_BY_COUNTRY[data.country]);
       }
       
       const isComplete = !!(data.display_name && data.gender && data.major && data.country && data.city);
@@ -218,6 +220,8 @@ export default function Home() {
         city: city,
         university: university,
         uni_name: uniName,
+        profile_pic: profilePic,
+        chat_theme: chatTheme,
         updated_at: new Date().toISOString()
       }, {
         onConflict: 'email'  
@@ -231,6 +235,65 @@ export default function Home() {
     }
   };
 
+  // Handle Profile Picture Upload
+  const handleProfilePicUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    if (file.size > 3 * 1024 * 1024) {
+      toast.error("Image too large! Max 3MB");
+      return;
+    }
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      toast.error("Only JPG, PNG, WEBP allowed");
+      return;
+    }
+
+    const toastId = toast.loading("Uploading photo...", { duration: Infinity });
+
+    const fileName = `profile-pics/${user.email}-${Date.now()}`;
+    const { data, error } = await supabase.storage
+      .from('chat-images')
+      .upload(fileName, file, { upsert: true });
+
+    if (error) {
+      toast.error("Upload failed!", { id: toastId });
+      return;
+    }
+
+    const { data: urlData } = supabase.storage
+      .from('chat-images')
+      .getPublicUrl(fileName);
+
+    if (urlData) {
+      setProfilePic(urlData.publicUrl);
+      // Save immediately
+      await supabase.from("user_profiles").upsert({
+        email: user.email,
+        profile_pic: urlData.publicUrl,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'email' });
+      toast.success("Profile photo updated!", { id: toastId });
+    }
+  };
+
+  // Handle Chat Theme Change
+  const handleThemeChange = async (themeId: number) => {
+    if (themeId > 2 && !isPremium) {
+      toast.error("🔒 Premium Feature - Coffee is $5. This is $3/week. Be smart.", { duration: 3000 });
+      return;
+    }
+    if (!user) return;
+    setChatTheme(themeId);
+    await supabase.from("user_profiles").upsert({
+      email: user.email,
+      chat_theme: themeId,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'email' });
+    toast.success("Theme updated!");
+  };
+
   // Update available cities/unis when country changes
   useEffect(() => {
     if (country) {
@@ -239,13 +302,11 @@ export default function Home() {
       } else {
         setAvailableCities([]);
       }
-      
       if (UNIVERSITIES_BY_COUNTRY[country]) {
         setAvailableUniversities(UNIVERSITIES_BY_COUNTRY[country]);
       } else {
         setAvailableUniversities([]);
       }
-      
       setCity("");
       setUniversity("");
     }
@@ -287,6 +348,7 @@ export default function Home() {
         major: major,
         country: country,
         city: city,
+        profilePic: profilePic,
         filters: {
           gender: filterGender,
           country: filterCountry,
@@ -320,19 +382,19 @@ export default function Home() {
       }
     });
 
-    s.on("reconnected", ({ roomId, partnerUni, partnerName, partnerCountry }) => {
+    s.on("reconnected", ({ roomId, partnerUni, partnerName, partnerCountry, partnerProfilePic }) => {
       setRoomId(roomId);
-      setPartnerInfo({ uni: partnerUni, name: partnerName, country: partnerCountry });
+      setPartnerInfo({ uni: partnerUni, name: partnerName, country: partnerCountry, profilePic: partnerProfilePic });
       setStatus(`Reconnected with ${partnerName}`);
       toast.success("Reconnected to chat!");
     });
 
     s.on("online_count", ({ count }) => setOnlineCount(count));
 
-    s.on("matched", ({ roomId, partnerUni, partnerName, partnerCountry }) => {
+    s.on("matched", ({ roomId, partnerUni, partnerName, partnerCountry, partnerProfilePic }) => {
       setRoomId(roomId);
       setLastRoomId(roomId);
-      setPartnerInfo({ uni: partnerUni, name: partnerName, country: partnerCountry });
+      setPartnerInfo({ uni: partnerUni, name: partnerName, country: partnerCountry, profilePic: partnerProfilePic });
       setMessages([]);
       setStatus(`Vibing with ${partnerName}`);
       setShowTimeoutAlert(false);
@@ -375,18 +437,14 @@ export default function Home() {
       }
     });
 
-    return () => {
-      s.disconnect();
-    };
+    return () => { s.disconnect(); };
   }, [isReadyToChat, user, jwtToken, targetUniFilter]);
 
   // Auto-delete messages after 2 minutes
   useEffect(() => {
-    messages.forEach((msg, index) => {
+    messages.forEach((msg) => {
       const msgKey = msg.ts;
-      
       if (messageTimers.has(msgKey)) return;
-      
       const timer = setTimeout(() => {
         setMessages(prev => prev.filter(m => m.ts !== msgKey));
         setMessageTimers(prev => {
@@ -395,13 +453,9 @@ export default function Home() {
           return newMap;
         });
       }, 120000);
-      
       setMessageTimers(prev => new Map(prev).set(msgKey, timer));
     });
-  
-    return () => {
-      messageTimers.forEach(timer => clearTimeout(timer));
-    };
+    return () => { messageTimers.forEach(timer => clearTimeout(timer)); };
   }, [messages]);
 
   // Search GIFs
@@ -409,20 +463,12 @@ export default function Home() {
     if (!query.trim()) return;
     setIsSearchingGifs(true);
     try {
-      const response = await fetch(
-        `${SERVER_URL}/api/gifs/search?q=${encodeURIComponent(query)}`
-      );
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
+      const response = await fetch(`${SERVER_URL}/api/gifs/search?q=${encodeURIComponent(query)}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      
       if (data.data && Array.isArray(data.data)) {
         setGifs(data.data);
       } else {
-        console.error('Invalid GIF response:', data);
         toast.error("Invalid GIF data received");
       }
     } catch (err) {
@@ -438,18 +484,9 @@ export default function Home() {
     setIsSearchingGifs(true);
     try {
       const response = await fetch(`${SERVER_URL}/api/gifs/trending`);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      
-      if (data.data && Array.isArray(data.data)) {
-        setGifs(data.data);
-      } else {
-        console.error('Invalid GIF response:', data);
-      }
+      if (data.data && Array.isArray(data.data)) setGifs(data.data);
     } catch (err) {
       console.error('Trending GIFs failed:', err);
     } finally {
@@ -470,105 +507,47 @@ export default function Home() {
 
   // Handle Image Upload (Premium Only)
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!isPremium) {
-      showPremiumPaywall();
-      return;
-    }
-    
+    if (!isPremium) { showPremiumPaywall(); return; }
     const file = e.target.files?.[0];
     if (!file) return;
-    
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("Image too large! Max 5MB");
-      return;
-    }
-    
-    if (!['image/jpeg', 'image/png', 'image/gif'].includes(file.type)) {
-      toast.error("Only JPG, PNG, GIF allowed");
-      return;
-    }
-    
+    if (file.size > 5 * 1024 * 1024) { toast.error("Image too large! Max 5MB"); return; }
+    if (!['image/jpeg', 'image/png', 'image/gif'].includes(file.type)) { toast.error("Only JPG, PNG, GIF allowed"); return; }
     setPendingImage(file);
     setShowTimerModal(true);
   };
 
   const sendImageWithTimer = async (timerSeconds: number) => {
     if (!pendingImage || !socket || !roomId) return;
-    
     setShowTimerModal(false);
-    const toastId = toast.loading("Uploading image...", {
-      duration: Infinity
-    });
-    
+    const toastId = toast.loading("Uploading image...", { duration: Infinity });
     const fileName = `${user.email}-${Date.now()}-${pendingImage.name}`;
-    const { data, error } = await supabase.storage
-      .from('chat-images')
-      .upload(fileName, pendingImage);
-    
-    if (error) {
-      toast.error("Upload failed!", { id: toastId });
-      setPendingImage(null);
-      return;
-    }
-    
-    const { data: urlData } = supabase.storage
-      .from('chat-images')
-      .getPublicUrl(fileName);
-    
+    const { data, error } = await supabase.storage.from('chat-images').upload(fileName, pendingImage);
+    if (error) { toast.error("Upload failed!", { id: toastId }); setPendingImage(null); return; }
+    const { data: urlData } = supabase.storage.from('chat-images').getPublicUrl(fileName);
     if (urlData) {
       const imageUrl = urlData.publicUrl;
-      const msg = { 
-        text: imageUrl, 
-        ts: Date.now(), 
-        from: "me" as const, 
-        isImage: true,
-        isBlurred: true,
-        timerSeconds: timerSeconds,
-        fileName: fileName
-      };
-      
+      const msg = { text: imageUrl, ts: Date.now(), from: "me" as const, isImage: true, isBlurred: true, timerSeconds, fileName };
       setMessages((prev) => [...prev, msg]);
-      socket.emit("send_message", { 
-        message: imageUrl, 
-        isImage: true, 
-        isBlurred: true,
-        timerSeconds: timerSeconds,
-        fileName: fileName
-      });
-      
+      socket.emit("send_message", { message: imageUrl, isImage: true, isBlurred: true, timerSeconds, fileName });
       toast.success("Image sent!", { id: toastId });
       setPendingImage(null);
     }
   };
 
   const handleImageClick = (imageUrl: string, fileName: string, timerSeconds: number) => {
-    setMessages(prev => prev.map(msg => 
-      msg.text === imageUrl 
-        ? { ...msg, isBlurred: false } 
-        : msg
-    ));
-    
+    setMessages(prev => prev.map(msg => msg.text === imageUrl ? { ...msg, isBlurred: false } : msg));
     const timer = setTimeout(async () => {
-      await supabase.storage
-        .from('chat-images')
-        .remove([fileName]);
-      
+      await supabase.storage.from('chat-images').remove([fileName]);
       setMessages(prev => prev.filter(msg => msg.text !== imageUrl));
-      
       toast("Image deleted", { icon: "🔥" });
     }, timerSeconds * 1000);
-    
     setImageTimers(prev => new Map(prev).set(imageUrl, timer));
   };
 
   // Show Premium Paywall
   const showPremiumPaywall = () => {
-    toast.error("🔒 Premium Feature - Coffee is $5. This is $3/week. Be smart.", {
-      duration: 3000,
-    });
-    setTimeout(() => {
-      toast("Stripe checkout coming soon!");
-    }, 1000);
+    toast.error("🔒 Premium Feature - Coffee is $5. This is $3/week. Be smart.", { duration: 3000 });
+    setTimeout(() => { toast("Stripe checkout coming soon!"); }, 1000);
   };
 
   // ---- HELPERS ----
@@ -593,66 +572,34 @@ export default function Home() {
     setLoading(true);
     const email = emailInput.toLowerCase().trim();
     const publicDomains = ["gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "icloud.com", "proton.me"];
-    
-    if (!email.includes("@")) { 
-      toast.error("Invalid email."); 
-      setLoading(false); 
-      return; 
-    }
-    
+    if (!email.includes("@")) { toast.error("Invalid email."); setLoading(false); return; }
     const domain = email.split("@")[1];
-    if (publicDomains.includes(domain)) {
-      toast.error("⚠️ Students only! Use your university email.");
-      setLoading(false);
-      return;
-    }
-    
+    if (publicDomains.includes(domain)) { toast.error("⚠️ Students only! Use your university email."); setLoading(false); return; }
     const { error } = await supabase.auth.signInWithOtp({ email });
-    if (error) { 
-      toast.error(error.message); 
-    } else { 
-      setShowOtpInput(true); 
-      toast.success(`Code sent to ${email}! 📩`); 
-    }
+    if (error) { toast.error(error.message); } 
+    else { setShowOtpInput(true); toast.success(`Code sent to ${email}! 📩`); }
     setLoading(false);
   };
 
   const handleVerifyCode = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.auth.verifyOtp({ 
-        email: emailInput, 
-        token: otpInput, 
-        type: 'email' 
-      });
-      
-      if (error) {
-        toast.error(error.message);
-        setLoading(false);
-        return;
-      }
-      
+      const { data, error } = await supabase.auth.verifyOtp({ email: emailInput, token: otpInput, type: 'email' });
+      if (error) { toast.error(error.message); setLoading(false); return; }
       toast.success("Verified! Setting up...");
-      
       setTimeout(async () => {
         const { data: session } = await supabase.auth.getSession();
         if (session?.session?.user) {
           setUser(session.session.user);
           const hasProfile = await loadUserProfile(session.session.user.email);
           await generateJWT(session.session);
-          
-          if (hasProfile) {
-            setCurrentView("terms");
-          } else {
-            setCurrentView("profile");
-          }
+          if (hasProfile) { setCurrentView("terms"); } else { setCurrentView("profile"); }
           setLoading(false);
         } else {
           toast.error("Session error. Please try again.");
           setLoading(false);
         }
       }, 500);
-      
     } catch (err) {
       console.error("Verification error:", err);
       toast.error("Verification failed. Try again.");
@@ -683,77 +630,57 @@ export default function Home() {
     toast.success("Link copied!");
   };
 
-  const handleDisconnect = () => { 
-    if (socket) socket.disconnect(); 
-    setSocket(null); 
-    setRoomId(null); 
-    setLastRoomId(null);
-    setMessages([]); 
-    setPartnerInfo(null); 
-    setIsReadyToChat(false);
-    setStatus("Idle"); 
-    setShowTimeoutAlert(false); 
+  const handleDisconnect = () => {
+    if (socket) socket.disconnect();
+    setSocket(null); setRoomId(null); setLastRoomId(null);
+    setMessages([]); setPartnerInfo(null); setIsReadyToChat(false);
+    setStatus("Idle"); setShowTimeoutAlert(false);
   };
 
-  const handleNextMatch = () => { 
-    if (!socket) return; 
-    setMessages([]);
-    setRoomId(null); 
-    setLastRoomId(null);
-    setPartnerInfo(null); 
-    setStatus("Skipping... ⏭️"); 
-    socket.disconnect(); 
-    setIsReadyToChat(false);
+  const handleNextMatch = () => {
+    if (!socket) return;
+    setMessages([]); setRoomId(null); setLastRoomId(null);
+    setPartnerInfo(null); setStatus("Skipping... ⏭️");
+    socket.disconnect(); setIsReadyToChat(false);
     setTimeout(() => setIsReadyToChat(true), 100);
   };
 
-  const handleReport = () => { 
-    if (!socket || !roomId) return; 
-    if (confirm("Report this user?")) { 
-      socket.emit("report_partner"); 
-      setStatus("Reported 🚫 Switching..."); 
-      setRoomId(null); 
-      setLastRoomId(null);
-      setPartnerInfo(null); 
-      setMessages([]); 
-      setTimeout(() => socket.emit("waiting"), 1500); 
-      toast.error("User reported."); 
+  const handleReport = () => {
+    if (!socket || !roomId) return;
+    if (confirm("Report this user?")) {
+      socket.emit("report_partner");
+      setStatus("Reported 🚫 Switching...");
+      setRoomId(null); setLastRoomId(null);
+      setPartnerInfo(null); setMessages([]);
+      setTimeout(() => socket.emit("waiting"), 1500);
+      toast.error("User reported.");
     }
   };
 
   const handleStartChat = async () => {
-    if (!displayName || !gender || !major || !country || !city) {
-      toast.error("Please fill all fields!");
-      return;
-    }
-    
+    if (!displayName || !gender || !major || !country || !city) { toast.error("Please fill all fields!"); return; }
     await saveUserProfile();
     setCurrentView("terms");
   };
-  
+
   const handleAcceptTerms = () => {
-    if (!acceptedTerms) {
-      toast.error("Please accept the terms!");
-      return;
-    }
+    if (!acceptedTerms) { toast.error("Please accept the terms!"); return; }
     setCurrentView("app");
   };
-  
-  const handleEditProfile = () => {
-    setShowEditProfile(true);
-  };
-  
+
+  const handleEditProfile = () => { setShowEditProfile(true); };
+
   const handleSaveEditedProfile = async () => {
     await saveUserProfile();
     setShowEditProfile(false);
   };
 
   // ==================== VIEW ROUTING ====================
-  
+
   if (currentView === "landing") {
     return <LandingPage onLoginClick={() => setCurrentView("login")} />;
   }
-  
+
   if (currentView === "login") {
     return (
       <LoginView
@@ -771,7 +698,7 @@ export default function Home() {
       />
     );
   }
-  
+
   if (currentView === "profile") {
     return (
       <ProfileSetup
@@ -795,7 +722,7 @@ export default function Home() {
       />
     );
   }
-  
+
   if (currentView === "terms") {
     return (
       <TermsView
@@ -807,23 +734,20 @@ export default function Home() {
       />
     );
   }
-  
+
   if (currentView === "app") {
     return (
       <div className="flex flex-col h-screen bg-black overflow-hidden">
         <MobileNavbar onlineCount={onlineCount} onLogout={handleLogout} />
         <Toaster position="top-center" richColors theme="dark" />
-        
+
         {showTimerModal && (
-          <TimerModal 
-            onClose={() => {
-              setShowTimerModal(false);
-              setPendingImage(null);
-            }}
+          <TimerModal
+            onClose={() => { setShowTimerModal(false); setPendingImage(null); }}
             onSelectTimer={sendImageWithTimer}
           />
         )}
-        
+
         <div className="flex-1 overflow-hidden pb-16">
           {activeTab === "home" && (
             isReadyToChat ? (
@@ -858,9 +782,11 @@ export default function Home() {
                 setGifSearch={setGifSearch}
                 onEndChat={() => setIsReadyToChat(false)}
                 onHandleImageClick={handleImageClick}
+                chatTheme={chatTheme}
+                myProfilePic={profilePic}
               />
             ) : (
-              <StartChatView 
+              <StartChatView
                 isPremium={isPremium}
                 filterGender={filterGender}
                 setFilterGender={setFilterGender}
@@ -877,9 +803,9 @@ export default function Home() {
               />
             )
           )}
-          
+
           {activeTab === "campuses" && <CampusesView />}
-          
+
           {activeTab === "profile" && (
             <ProfileView
               displayName={displayName}
@@ -904,14 +830,19 @@ export default function Home() {
               availableUniversities={availableUniversities}
               onSave={handleSaveEditedProfile}
               onCancel={() => setShowEditProfile(false)}
+              profilePic={profilePic}
+              onProfilePicUpload={handleProfilePicUpload}
+              chatTheme={chatTheme}
+              onThemeChange={handleThemeChange}
+              isPremiumForTheme={isPremium}
             />
           )}
         </div>
-        
+
         <BottomTabBar activeTab={activeTab} onTabChange={setActiveTab} />
       </div>
     );
   }
-  
+
   return null;
 }

@@ -1,9 +1,31 @@
 // Location: /apps/web/app/components/profile.tsx
 "use client";
 
+import { useRef } from "react";
 import { toast } from "sonner";
 import { COUNTRIES_CITIES } from "../lib/countries";
 import { MAJORS, GENDERS } from "../lib/constants";
+
+// ==================== CHAT THEMES CONFIG ====================
+
+export const CHAT_THEMES = [
+  { id: 1, name: "Default", preview: "bg-black", free: true },
+  { id: 2, name: "Midnight", preview: "bg-zinc-900", free: true },
+  { id: 3, name: "Forest", preview: "bg-emerald-950", free: false },
+  { id: 4, name: "Sunset", preview: "bg-orange-950", free: false },
+  { id: 5, name: "Galaxy", preview: "bg-purple-950", free: false },
+];
+
+export function getChatThemeBg(themeId: number): string {
+  switch (themeId) {
+    case 1: return "bg-black";
+    case 2: return "bg-[url('/themes/bg2.png')] bg-cover bg-center";
+    case 3: return "bg-[url('/themes/bg3.png')] bg-cover bg-center";
+    case 4: return "bg-[url('/themes/bg4.png')] bg-cover bg-center";
+    case 5: return "bg-[url('/themes/bg5.png')] bg-cover bg-center";
+    default: return "bg-black";
+  }
+}
 
 // ==================== MOBILE NAVBAR ====================
 
@@ -151,14 +173,23 @@ interface ProfileViewProps {
   availableUniversities: string[];
   onSave: () => void;
   onCancel: () => void;
+  profilePic: string | null;
+  onProfilePicUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  chatTheme: number;
+  onThemeChange: (themeId: number) => void;
+  isPremiumForTheme: boolean;
 }
 
 export function ProfileView({ 
   displayName, email, isPremium, premiumUntil, onLogout, onEditProfile, showEditProfile,
   setDisplayName, setGender, setMajor, setCountry, setCity, setUniversity,
   gender, major, country, city, university,
-  availableCities, availableUniversities, onSave, onCancel
+  availableCities, availableUniversities, onSave, onCancel,
+  profilePic, onProfilePicUpload,
+  chatTheme, onThemeChange, isPremiumForTheme
 }: ProfileViewProps) {
+  const picInputRef = useRef<HTMLInputElement>(null);
+
   if (showEditProfile) {
     return (
       <div className="h-full overflow-y-auto p-4 pb-8">
@@ -167,9 +198,7 @@ export function ProfileView({
           
           <div className="space-y-4">
             <div>
-              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
-                Display Name
-              </label>
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">Display Name</label>
               <input 
                 className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
                 value={displayName} 
@@ -179,9 +208,7 @@ export function ProfileView({
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
-                  Gender
-                </label>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">Gender</label>
                 <select 
                   className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
                   value={gender} 
@@ -192,9 +219,7 @@ export function ProfileView({
                 </select>
               </div>
               <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
-                  Major
-                </label>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">Major</label>
                 <select 
                   className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
                   value={major} 
@@ -207,9 +232,7 @@ export function ProfileView({
             </div>
 
             <div>
-              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
-                Country
-              </label>
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">Country</label>
               <select 
                 className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
                 value={country} 
@@ -223,28 +246,20 @@ export function ProfileView({
             </div>
             
             <div>
-              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
-                City
-              </label>
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">City</label>
               <select 
                 className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
                 value={city} 
                 onChange={(e) => setCity(e.target.value)}
                 disabled={!country}
               >
-                <option value="" disabled>
-                  {country ? "Select City" : "Select Country First"}
-                </option>
-                {availableCities.map((c: string) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
+                <option value="" disabled>{country ? "Select City" : "Select Country First"}</option>
+                {availableCities.map((c: string) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             
             <div>
-              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">
-                University (Optional)
-              </label>
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider ml-1">University (Optional)</label>
               <select 
                 className="mobile-input input-solid w-full mt-1 rounded-xl p-3" 
                 value={university} 
@@ -252,25 +267,13 @@ export function ProfileView({
                 disabled={!country}
               >
                 <option value="">Skip for now</option>
-                {availableUniversities.map((u: string) => (
-                  <option key={u} value={u}>{u}</option>
-                ))}
+                {availableUniversities.map((u: string) => <option key={u} value={u}>{u}</option>)}
               </select>
             </div>
 
             <div className="flex gap-2 mt-6">
-              <button 
-                onClick={onSave}
-                className="btn-emerald flex-1 rounded-xl py-3"
-              >
-                Save Changes
-              </button>
-              <button 
-                onClick={onCancel}
-                className="px-6 py-3 rounded-xl bg-zinc-800 text-white hover:bg-zinc-700"
-              >
-                Cancel
-              </button>
+              <button onClick={onSave} className="btn-emerald flex-1 rounded-xl py-3">Save Changes</button>
+              <button onClick={onCancel} className="px-6 py-3 rounded-xl bg-zinc-800 text-white hover:bg-zinc-700">Cancel</button>
             </div>
           </div>
         </div>
@@ -281,34 +284,53 @@ export function ProfileView({
   return (
     <div className="h-full overflow-y-auto p-4 pb-8">
       <div className="space-y-4">
-        {/* Profile Card */}
+
+        {/* Profile Card with Photo Upload */}
         <div className="solid-panel rounded-2xl p-6 text-center">
-          <div className="w-16 h-16 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 mx-auto mb-3 flex items-center justify-center text-2xl font-bold text-white">
-            {displayName?.charAt(0)?.toUpperCase()}
+          <div className="relative w-20 h-20 mx-auto mb-3">
+            {profilePic ? (
+              <img 
+                src={profilePic} 
+                alt="Profile" 
+                className="w-20 h-20 rounded-full object-cover border-2 border-emerald-500/30"
+              />
+            ) : (
+              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-3xl font-bold text-white">
+                {displayName?.charAt(0)?.toUpperCase()}
+              </div>
+            )}
+            {/* Upload Button Overlay */}
+            <button
+              onClick={() => picInputRef.current?.click()}
+              className="absolute bottom-0 right-0 w-7 h-7 bg-emerald-500 rounded-full flex items-center justify-center text-white text-xs border-2 border-black hover:bg-emerald-400 transition-colors"
+            >
+              📷
+            </button>
+            <input
+              ref={picInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onChange={onProfilePicUpload}
+              className="hidden"
+            />
           </div>
           <h2 className="text-xl font-bold text-white mb-1">{displayName}</h2>
           <p className="text-xs text-zinc-500">{email}</p>
+          <p className="text-[10px] text-zinc-600 mt-1">Tap 📷 to change photo</p>
         </div>
-        
+
         {/* Premium Status */}
         <div className={`solid-panel rounded-2xl p-6 ${isPremium ? "border-emerald-500/30" : ""}`}>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-white">Premium Status</h3>
             {isPremium ? (
-              <span className="px-2 py-1 bg-emerald-500/10 text-emerald-400 text-[10px] font-bold rounded-full border border-emerald-500/20">
-                ACTIVE
-              </span>
+              <span className="px-2 py-1 bg-emerald-500/10 text-emerald-400 text-[10px] font-bold rounded-full border border-emerald-500/20">ACTIVE</span>
             ) : (
-              <span className="px-2 py-1 bg-zinc-800 text-zinc-500 text-[10px] font-bold rounded-full">
-                FREE
-              </span>
+              <span className="px-2 py-1 bg-zinc-800 text-zinc-500 text-[10px] font-bold rounded-full">FREE</span>
             )}
           </div>
-          
           {isPremium ? (
-            <p className="text-xs text-zinc-400">
-              Active until {premiumUntil?.toLocaleDateString()}
-            </p>
+            <p className="text-xs text-zinc-400">Active until {premiumUntil?.toLocaleDateString()}</p>
           ) : (
             <div>
               <p className="text-xs text-zinc-400 mb-3">Unlock advanced filters, image uploads & more!</p>
@@ -321,7 +343,45 @@ export function ProfileView({
             </div>
           )}
         </div>
-        
+
+        {/* Chat Themes */}
+        <div className="solid-panel rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-bold text-white">Chat Theme</h3>
+            <span className="text-[10px] text-zinc-500">2 free · 3 premium</span>
+          </div>
+          <div className="grid grid-cols-5 gap-2">
+            {CHAT_THEMES.map((theme) => {
+              const isLocked = !theme.free && !isPremiumForTheme;
+              const isActive = chatTheme === theme.id;
+              return (
+                <button
+                  key={theme.id}
+                  onClick={() => onThemeChange(theme.id)}
+                  className={`relative flex flex-col items-center gap-1.5 p-2 rounded-xl border transition-all ${
+                    isActive 
+                      ? 'border-emerald-500 bg-emerald-500/10' 
+                      : 'border-white/10 bg-zinc-900/50 hover:border-white/20'
+                  }`}
+                >
+                  {/* Theme preview - shows bg1-5.png as preview */}
+                  <div 
+                    className={`w-10 h-10 rounded-lg overflow-hidden border border-white/10 ${theme.preview}`}
+                    style={theme.id > 1 ? { backgroundImage: `url('/themes/bg${theme.id}.png')`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}}
+                  />
+                  <span className="text-[9px] text-zinc-400 font-medium">{theme.name}</span>
+                  {isLocked && (
+                    <span className="absolute -top-1 -right-1 text-[10px]">🔒</span>
+                  )}
+                  {isActive && (
+                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center text-[8px] text-white">✓</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Settings */}
         <div className="space-y-2">
           <button 

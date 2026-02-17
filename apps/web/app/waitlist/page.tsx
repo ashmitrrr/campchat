@@ -20,7 +20,6 @@ export default function WaitlistPage() {
       return;
     }
 
-    // Basic email validation
     if (!email.includes("@")) {
       toast.error("Please enter a valid email");
       return;
@@ -29,6 +28,7 @@ export default function WaitlistPage() {
     setLoading(true);
 
     try {
+      // Step 1: Save to Supabase
       const { error } = await supabase
         .from("waitlist")
         .insert({
@@ -39,7 +39,7 @@ export default function WaitlistPage() {
         });
 
       if (error) {
-        if (error.code === "23505") { // Duplicate email
+        if (error.code === "23505") {
           toast.error("You're already on the waitlist!");
         } else {
           console.error("Waitlist error:", error);
@@ -48,6 +48,13 @@ export default function WaitlistPage() {
         setLoading(false);
         return;
       }
+
+      // Step 2: Send confirmation email
+      await fetch("/api/waitlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, name }),
+      });
 
       // Success!
       setSubmitted(true);
@@ -66,7 +73,7 @@ export default function WaitlistPage() {
         <Toaster position="top-center" richColors theme="dark" />
         <div className="text-center max-w-md">
           <div className="mb-6 inline-block rounded-full bg-emerald-500/10 p-6 border border-emerald-500/20">
-            <span className="text-6xl">✅</span>
+            <img src="/logo.png" alt="Logo" className="w-16 h-16 object-contain" />
           </div>
           <h1 className="text-4xl font-bold mb-4">You're In!</h1>
           <p className="text-lg text-zinc-400 mb-8">
@@ -113,7 +120,7 @@ export default function WaitlistPage() {
             <div className="text-center mb-8">
               <div className="mb-4 inline-block rounded-full bg-emerald-500/10 p-4 border border-emerald-500/20">
                 <img src="/logo.png" alt="Logo" className="w-12 h-12 object-contain" />
-            </div>
+              </div>
               <h1 className="text-3xl font-bold text-white mb-2">Join the Waitlist</h1>
               <p className="text-zinc-400 text-sm">
                 Be the first to know when CampChat launches at your university.
@@ -166,7 +173,7 @@ export default function WaitlistPage() {
                 disabled={loading}
                 className="btn-emerald w-full rounded-xl py-4 text-lg font-bold disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? "Joining..." : "Join Waitlist"}
+                {loading ? "Joining..." : "Join Waitlist 🚀"}
               </button>
             </form>
 

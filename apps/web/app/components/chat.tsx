@@ -226,10 +226,10 @@ export function ChatView(props: ChatViewProps) {
       </div>
 
       {/* Messages Area - Theme Applied Here */}
-      <div className={`flex-1 overflow-y-auto p-3 space-y-2 pb-safe ${themeBg}`}>
+      <div className={`flex-1 overflow-y-auto p-3 space-y-2 pb-safe relative ${themeBg}`}>
         {/* Overlay for readability on image themes */}
         {props.chatTheme > 1 && (
-          <div className="absolute inset-0 bg-black/30 pointer-events-none" />
+          <div className="absolute inset-0 bg-black/30 pointer-events-none z-0" />
         )}
         
         {props.messages.length === 0 && (

@@ -81,7 +81,6 @@ loadBans();
 
 // ============== GIF API ROUTES ==============
 app.get("/api/gifs/search", async (req, res) => {
-  // 🔒 IMPROVEMENT #4: Guard against missing API key
   if (!process.env.GIPHY_API_KEY) {
     return res.status(500).json({ error: "GIPHY API key not configured" });
   }
@@ -106,7 +105,6 @@ app.get("/api/gifs/search", async (req, res) => {
 });
 
 app.get("/api/gifs/trending", async (req, res) => {
-  // 🔒 IMPROVEMENT #4: Guard against missing API key
   if (!process.env.GIPHY_API_KEY) {
     return res.status(500).json({ error: "GIPHY API key not configured" });
   }
@@ -196,7 +194,6 @@ function tryMatch() {
       const p2 = queue[j];
 
       if (isCompatible(p1, p2)) {
-        // 🔒 IMPROVEMENT #3: Safer queue removal (prevents index mutation bugs)
         const newQueue = queue.filter(
           (s) => s.id !== p1.id && s.id !== p2.id
         );
@@ -219,17 +216,20 @@ function tryMatch() {
           createdAt: Date.now()
         });
 
+        // ✅ FIXED: Now sending partnerProfilePic
         p1.emit("matched", { 
           roomId, 
           partnerUni: p2.userData.uni, 
           partnerName: p2.userData.name,
-          partnerCountry: p2.userData.country 
+          partnerCountry: p2.userData.country,
+          partnerProfilePic: p2.userData.profilePic || null
         });
         p2.emit("matched", { 
           roomId, 
           partnerUni: p1.userData.uni, 
           partnerName: p1.userData.name,
-          partnerCountry: p1.userData.country 
+          partnerCountry: p1.userData.country,
+          partnerProfilePic: p1.userData.profilePic || null
         });
 
         tryMatch();
@@ -257,22 +257,23 @@ function broadcastOnlineCount() {
 io.on("connection", (socket) => {
   
   socket.on("set_profile", (profileData) => {
-  socket.userData = {
-    uni: profileData.uni || "Unknown",
-    name: profileData.name || "Stranger",
-    gender: profileData.gender || "Hidden",
-    major: profileData.major || "Undecided",
-    country: profileData.country || "Unknown",
-    city: profileData.city || "Unknown",
-    filters: profileData.filters || {
-      gender: "Any",
-      country: "Any",
-      uni: "Any",
-      major: "Any"
-    }
-  };
+    // ✅ FIXED: Now storing profilePic in userData
+    socket.userData = {
+      uni: profileData.uni || "Unknown",
+      name: profileData.name || "Stranger",
+      gender: profileData.gender || "Hidden",
+      major: profileData.major || "Undecided",
+      country: profileData.country || "Unknown",
+      city: profileData.city || "Unknown",
+      profilePic: profileData.profilePic || null,
+      filters: profileData.filters || {
+        gender: "Any",
+        country: "Any",
+        uni: "Any",
+        major: "Any"
+      }
+    };
     
-    // 🔒 IMPROVEMENT #1: Prevent duplicate queue entries
     if (!queue.find((s) => s.id === socket.id)) {
       queue.push(socket);
     }
@@ -295,23 +296,18 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 🔒 IMPROVEMENT #2: Validate message content (CRITICAL)
   socket.on("send_message", ({ message, isGif, isImage, isBlurred, timerSeconds, fileName }) => {
-    // Validate message exists and is a string
     if (!message || typeof message !== "string") return;
 
     const trimmed = message.trim();
     
-    // Reject empty messages
     if (trimmed.length === 0) return;
     
-    // Reject overly long messages (prevents spam/abuse)
     if (trimmed.length > MAX_MESSAGE_LENGTH) {
       socket.emit("rate_limited", { type: "message_too_long" });
       return;
     }
 
-    // Rate limiting
     if (!checkRateLimit(messageRateLimits, socket.email, MESSAGE_LIMIT, 60000)) {
       socket.emit("rate_limited", { type: "message" });
       return;
@@ -331,6 +327,7 @@ io.on("connection", (socket) => {
       });
     }
   });
+
   socket.on("typing", ({ roomId }) => {
     socket.to(roomId).emit("typing");
   });
@@ -407,11 +404,14 @@ io.on("connection", (socket) => {
         roomToSockets.set(roomId, updatedSockets);
         
         const partner = persistedRoom.users.find(u => u.email !== socket.email);
+        
+        // ✅ FIXED: Now sending partnerProfilePic on reconnect
         socket.emit("reconnected", { 
           roomId, 
           partnerUni: partner.uni, 
           partnerName: partner.name,
-          partnerCountry: partner.country 
+          partnerCountry: partner.country,
+          partnerProfilePic: partner.profilePic || null
         });
       }
     }

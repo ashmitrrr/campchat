@@ -16,14 +16,52 @@ export const CHAT_THEMES = [
   { id: 5, name: "Galaxy", preview: "bg-purple-950", free: false },
 ];
 
-export function getChatThemeBg(themeId: number): string {
+export function getChatThemeBg(themeId: number): { className: string; style?: React.CSSProperties } {
   switch (themeId) {
-    case 1: return "bg-black";
-    case 2: return "bg-[url('/themes/bg2.png')] bg-cover bg-center";
-    case 3: return "bg-[url('/themes/bg3.png')] bg-cover bg-center";
-    case 4: return "bg-[url('/themes/bg4.png')] bg-cover bg-center";
-    case 5: return "bg-[url('/themes/bg5.png')] bg-cover bg-center";
-    default: return "bg-black";
+    case 1: 
+      return { className: "bg-black" };
+    case 2: 
+      return { 
+        className: "", 
+        style: { 
+          backgroundImage: "url('/themes/bg2.png')", 
+          backgroundSize: "cover", 
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat"
+        } 
+      };
+    case 3: 
+      return { 
+        className: "", 
+        style: { 
+          backgroundImage: "url('/themes/bg3.png')", 
+          backgroundSize: "cover", 
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat"
+        } 
+      };
+    case 4: 
+      return { 
+        className: "", 
+        style: { 
+          backgroundImage: "url('/themes/bg5.png')", 
+          backgroundSize: "cover", 
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat"
+        } 
+      };
+    case 5: 
+      return { 
+        className: "", 
+        style: { 
+          backgroundImage: "url('/themes/bg4.png')", 
+          backgroundSize: "cover", 
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat"
+        } 
+      };
+    default: 
+      return { className: "bg-black" };
   }
 }
 

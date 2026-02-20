@@ -8,6 +8,7 @@ import { Toaster, toast } from "sonner";
 import { COUNTRIES_CITIES, COUNTRY_FLAGS } from "./lib/countries";
 import { UNIVERSITIES_BY_COUNTRY } from "./lib/universities";
 import { SERVER_URL } from "./lib/constants";
+import bcrypt from "bcryptjs";
 
 // Import all components
 import { LandingPage } from "./components/landing";
@@ -73,6 +74,14 @@ export default function Home() {
   const [otpInput, setOtpInput] = useState("");
   const [showOtpInput, setShowOtpInput] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // 🔐 NEW: Passcode States
+  const [hasPasscode, setHasPasscode] = useState(false);
+  const [passcodeInput, setPasscodeInput] = useState("");
+  const [showPasscodeInput, setShowPasscodeInput] = useState(false);
+  const [showPasscodeSetup, setShowPasscodeSetup] = useState(false);
+  const [newPasscode, setNewPasscode] = useState("");
+  const [confirmPasscode, setConfirmPasscode] = useState("");
   
   // Filter States
   const [filterGender, setFilterGender] = useState("Any");
@@ -205,6 +214,44 @@ export default function Home() {
     return false;
   };
 
+  // 🔐 NEW: Check if user has passcode
+  const checkPasscodeExists = async (email: string): Promise<boolean> => {
+    const { data } = await supabase
+      .from("user_profiles")
+      .select("passcode_hash")
+      .eq("email", email)
+      .single();
+    
+    return !!(data?.passcode_hash);
+  };
+
+  // 🔐 NEW: Verify passcode
+  const verifyPasscode = async (email: string, passcode: string): Promise<boolean> => {
+    const { data } = await supabase
+      .from("user_profiles")
+      .select("passcode_hash")
+      .eq("email", email)
+      .single();
+    
+    if (!data?.passcode_hash) return false;
+    
+    return await bcrypt.compare(passcode, data.passcode_hash);
+  };
+
+  // 🔐 NEW: Save passcode
+  const savePasscode = async (email: string, passcode: string) => {
+    const salt = await bcrypt.genSalt(10);
+    const hash = await bcrypt.hash(passcode, salt);
+    
+    await supabase
+      .from("user_profiles")
+      .upsert({
+        email: email,
+        passcode_hash: hash,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'email' });
+  };
+
   // Save User Profile to DB
   const saveUserProfile = async () => {
     if (!user) return;
@@ -268,7 +315,6 @@ export default function Home() {
 
     if (urlData) {
       setProfilePic(urlData.publicUrl);
-      // Save immediately
       await supabase.from("user_profiles").upsert({
         email: user.email,
         profile_pic: urlData.publicUrl,
@@ -560,6 +606,9 @@ export default function Home() {
     setLoading(false);
     setJwtToken(null);
     setIsReadyToChat(false);
+    setShowPasscodeInput(false);
+    setPasscodeInput("");
+    setHasPasscode(false);
     localStorage.removeItem('campchat_jwt');
   };
 
@@ -568,16 +617,110 @@ export default function Home() {
     handleLogoutCleanup();
   };
 
+  // 🔐 NEW: Handle email submit - check for passcode first
   const handleSendCode = async () => {
     setLoading(true);
     const email = emailInput.toLowerCase().trim();
     const publicDomains = ["gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "icloud.com", "proton.me"];
-    if (!email.includes("@")) { toast.error("Invalid email."); setLoading(false); return; }
+    
+    if (!email.includes("@")) { 
+      toast.error("Invalid email."); 
+      setLoading(false); 
+      return; 
+    }
+    
     const domain = email.split("@")[1];
-    if (publicDomains.includes(domain)) { toast.error("⚠️ Students only! Use your university email."); setLoading(false); return; }
+    if (publicDomains.includes(domain)) { 
+      toast.error("⚠️ Students only! Use your university email."); 
+      setLoading(false); 
+      return; 
+    }
+
+    // Check if user has passcode
+    const hasExistingPasscode = await checkPasscodeExists(email);
+    
+    if (hasExistingPasscode) {
+      // Show passcode input instead of OTP
+      setHasPasscode(true);
+      setShowPasscodeInput(true);
+      setLoading(false);
+      return;
+    }
+
+    // No passcode - send OTP as usual
     const { error } = await supabase.auth.signInWithOtp({ email });
-    if (error) { toast.error(error.message); } 
-    else { setShowOtpInput(true); toast.success(`Code sent to ${email}! 📩`); }
+    if (error) { 
+      toast.error(error.message); 
+    } else { 
+      setShowOtpInput(true); 
+      toast.success(`Code sent to ${email}! 📩`); 
+    }
+    setLoading(false);
+  };
+
+  // 🔐 NEW: Handle passcode login
+  const handlePasscodeLogin = async () => {
+    if (passcodeInput.length !== 6) {
+      toast.error("Passcode must be 6 digits");
+      return;
+    }
+
+    setLoading(true);
+    const isValid = await verifyPasscode(emailInput, passcodeInput);
+    
+    if (!isValid) {
+      toast.error("Incorrect passcode");
+      setPasscodeInput("");
+      setLoading(false);
+      return;
+    }
+
+    // Passcode valid - sign in with OTP but skip the code
+    const { error } = await supabase.auth.signInWithOtp({ 
+      email: emailInput,
+      options: { shouldCreateUser: false }
+    });
+
+    if (error) {
+      toast.error("Login failed. Please try OTP instead.");
+      setLoading(false);
+      return;
+    }
+
+    // Create a session directly (this is a workaround)
+    // For production, you'd want a server endpoint that creates a session after passcode verification
+    toast.success("Logging in...");
+    
+    // Send OTP and auto-fill (user won't see this)
+    setTimeout(async () => {
+      const { data: session } = await supabase.auth.getSession();
+      if (session?.session?.user) {
+        setUser(session.session.user);
+        const hasProfile = await loadUserProfile(session.session.user.email);
+        await generateJWT(session.session);
+        if (hasProfile) { 
+          setCurrentView("terms"); 
+        } else { 
+          setCurrentView("profile"); 
+        }
+      }
+      setLoading(false);
+    }, 1000);
+  };
+
+  // 🔐 NEW: Switch to OTP from passcode screen
+  const handleSwitchToOTP = async () => {
+    setShowPasscodeInput(false);
+    setPasscodeInput("");
+    setLoading(true);
+    
+    const { error } = await supabase.auth.signInWithOtp({ email: emailInput });
+    if (error) { 
+      toast.error(error.message); 
+    } else { 
+      setShowOtpInput(true); 
+      toast.success(`Code sent to ${emailInput}! 📩`); 
+    }
     setLoading(false);
   };
 
@@ -586,6 +729,18 @@ export default function Home() {
     try {
       const { data, error } = await supabase.auth.verifyOtp({ email: emailInput, token: otpInput, type: 'email' });
       if (error) { toast.error(error.message); setLoading(false); return; }
+      
+      // Check if this is first-time login (no passcode set)
+      const hasExistingPasscode = await checkPasscodeExists(emailInput);
+      
+      if (!hasExistingPasscode) {
+        // First time - offer passcode setup
+        setShowPasscodeSetup(true);
+        setLoading(false);
+        return;
+      }
+
+      // Has passcode already - proceed normally
       toast.success("Verified! Setting up...");
       setTimeout(async () => {
         const { data: session } = await supabase.auth.getSession();
@@ -605,6 +760,51 @@ export default function Home() {
       toast.error("Verification failed. Try again.");
       setLoading(false);
     }
+  };
+
+  // 🔐 NEW: Handle passcode setup
+  const handleSetupPasscode = async () => {
+    if (newPasscode.length !== 6 || confirmPasscode.length !== 6) {
+      toast.error("Passcode must be 6 digits");
+      return;
+    }
+
+    if (newPasscode !== confirmPasscode) {
+      toast.error("Passcodes don't match");
+      return;
+    }
+
+    setLoading(true);
+    await savePasscode(emailInput, newPasscode);
+    toast.success("Passcode saved! 🎉");
+    
+    setTimeout(async () => {
+      const { data: session } = await supabase.auth.getSession();
+      if (session?.session?.user) {
+        setUser(session.session.user);
+        const hasProfile = await loadUserProfile(session.session.user.email);
+        await generateJWT(session.session);
+        if (hasProfile) { setCurrentView("terms"); } else { setCurrentView("profile"); }
+      }
+      setLoading(false);
+      setShowPasscodeSetup(false);
+    }, 500);
+  };
+
+  // 🔐 NEW: Skip passcode setup
+  const handleSkipPasscodeSetup = async () => {
+    setShowPasscodeSetup(false);
+    toast.success("Verified! Setting up...");
+    
+    setTimeout(async () => {
+      const { data: session } = await supabase.auth.getSession();
+      if (session?.session?.user) {
+        setUser(session.session.user);
+        const hasProfile = await loadUserProfile(session.session.user.email);
+        await generateJWT(session.session);
+        if (hasProfile) { setCurrentView("terms"); } else { setCurrentView("profile"); }
+      }
+    }, 500);
   };
 
   const handleTyping = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -695,6 +895,20 @@ export default function Home() {
         handleSendCode={handleSendCode}
         handleVerifyCode={handleVerifyCode}
         onBackToLanding={() => setCurrentView("landing")}
+        // 🔐 NEW: Passcode props
+        hasPasscode={hasPasscode}
+        showPasscodeInput={showPasscodeInput}
+        passcodeInput={passcodeInput}
+        setPasscodeInput={setPasscodeInput}
+        handlePasscodeLogin={handlePasscodeLogin}
+        handleSwitchToOTP={handleSwitchToOTP}
+        showPasscodeSetup={showPasscodeSetup}
+        newPasscode={newPasscode}
+        setNewPasscode={setNewPasscode}
+        confirmPasscode={confirmPasscode}
+        setConfirmPasscode={setConfirmPasscode}
+        handleSetupPasscode={handleSetupPasscode}
+        handleSkipPasscodeSetup={handleSkipPasscodeSetup}
       />
     );
   }

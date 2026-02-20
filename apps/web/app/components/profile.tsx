@@ -44,7 +44,7 @@ export function getChatThemeBg(themeId: number): { className: string; style?: Re
       return { 
         className: "", 
         style: { 
-          backgroundImage: "url('/themes/bg5.png')", 
+          backgroundImage: "url('/themes/bg4.png')", 
           backgroundSize: "cover", 
           backgroundPosition: "center",
           backgroundRepeat: "no-repeat"
@@ -54,7 +54,7 @@ export function getChatThemeBg(themeId: number): { className: string; style?: Re
       return { 
         className: "", 
         style: { 
-          backgroundImage: "url('/themes/bg4.png')", 
+          backgroundImage: "url('/themes/bg5.png')", 
           backgroundSize: "cover", 
           backgroundPosition: "center",
           backgroundRepeat: "no-repeat"

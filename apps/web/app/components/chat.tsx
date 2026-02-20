@@ -178,7 +178,7 @@ interface ChatViewProps {
 }
 
 export function ChatView(props: ChatViewProps) {
-  const themeBg = getChatThemeBg(props.chatTheme);
+  const themeBgData = getChatThemeBg(props.chatTheme);
 
   return (
     <div className="flex flex-col h-full">
@@ -226,7 +226,10 @@ export function ChatView(props: ChatViewProps) {
       </div>
 
       {/* Messages Area - Theme Applied Here */}
-      <div className={`flex-1 overflow-y-auto p-3 space-y-2 pb-safe relative ${themeBg}`}>
+      <div 
+        className={`flex-1 overflow-y-auto p-3 space-y-2 pb-safe relative ${themeBgData.className}`}
+        style={themeBgData.style}
+      >
         {/* Overlay for readability on image themes */}
         {props.chatTheme > 1 && (
           <div className="absolute inset-0 bg-black/30 pointer-events-none z-0" />

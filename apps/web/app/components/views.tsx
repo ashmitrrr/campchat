@@ -20,6 +20,20 @@ interface LoginViewProps {
   handleSendCode: () => void;
   handleVerifyCode: () => void;
   onBackToLanding: () => void;
+  // 🔐 NEW: Passcode props
+  hasPasscode: boolean;
+  showPasscodeInput: boolean;
+  passcodeInput: string;
+  setPasscodeInput: (code: string) => void;
+  handlePasscodeLogin: () => void;
+  handleSwitchToOTP: () => void;
+  showPasscodeSetup: boolean;
+  newPasscode: string;
+  setNewPasscode: (code: string) => void;
+  confirmPasscode: string;
+  setConfirmPasscode: (code: string) => void;
+  handleSetupPasscode: () => void;
+  handleSkipPasscodeSetup: () => void;
 }
 
 export function LoginView({
@@ -33,8 +47,91 @@ export function LoginView({
   loading,
   handleSendCode,
   handleVerifyCode,
-  onBackToLanding
+  onBackToLanding,
+  hasPasscode,
+  showPasscodeInput,
+  passcodeInput,
+  setPasscodeInput,
+  handlePasscodeLogin,
+  handleSwitchToOTP,
+  showPasscodeSetup,
+  newPasscode,
+  setNewPasscode,
+  confirmPasscode,
+  setConfirmPasscode,
+  handleSetupPasscode,
+  handleSkipPasscodeSetup
 }: LoginViewProps) {
+  
+  // 🔐 Passcode Setup Modal
+  if (showPasscodeSetup) {
+    return (
+      <div className="flex flex-col h-screen overflow-hidden bg-black">
+        <MobileNavbar onlineCount={onlineCount} onLogout={null} />
+        <Toaster position="top-center" richColors theme="dark" />
+        
+        <div className="flex-1 flex flex-col items-center justify-center p-6 relative">
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-emerald-500/10 blur-[100px] rounded-full pointer-events-none"></div>
+
+          <div className="solid-panel w-full max-w-md rounded-2xl p-8 text-center relative z-10">
+            <div className="mb-6 inline-block rounded-full bg-emerald-500/10 p-4 border border-emerald-500/20">
+              <span className="text-4xl">🔐</span>
+            </div>
+            <h1 className="text-2xl font-bold text-white mb-2">Set Up Quick Login</h1>
+            <p className="text-zinc-400 mb-6 text-sm">Create a 6-digit passcode for faster login next time</p>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">New Passcode</label>
+                <input 
+                  type="password"
+                  inputMode="numeric"
+                  placeholder="••••••" 
+                  className="mobile-input input-solid w-full rounded-xl p-4 text-center text-2xl tracking-[0.5em] mt-2" 
+                  maxLength={6} 
+                  value={newPasscode} 
+                  onChange={(e) => setNewPasscode(e.target.value.replace(/\D/g, ''))} 
+                />
+              </div>
+              
+              <div>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Confirm Passcode</label>
+                <input 
+                  type="password"
+                  inputMode="numeric"
+                  placeholder="••••••" 
+                  className="mobile-input input-solid w-full rounded-xl p-4 text-center text-2xl tracking-[0.5em] mt-2" 
+                  maxLength={6} 
+                  value={confirmPasscode} 
+                  onChange={(e) => setConfirmPasscode(e.target.value.replace(/\D/g, ''))} 
+                />
+              </div>
+
+              <button 
+                onClick={handleSetupPasscode} 
+                disabled={loading || newPasscode.length < 6 || confirmPasscode.length < 6} 
+                className="btn-emerald w-full rounded-xl py-4"
+              >
+                {loading ? "Saving..." : "Save Passcode 🔐"}
+              </button>
+              
+              <button 
+                onClick={handleSkipPasscodeSetup} 
+                className="text-xs text-zinc-500 hover:text-white mt-2 block mx-auto"
+              >
+                Skip for now
+              </button>
+            </div>
+
+            <div className="mt-6 p-3 rounded-xl bg-zinc-900/50 border border-white/5">
+              <p className="text-[10px] text-zinc-500">💡 With a passcode, you won't need OTP codes every time you log in</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-black">
       <MobileNavbar onlineCount={onlineCount} onLogout={null} />
@@ -57,7 +154,38 @@ export function LoginView({
           <h1 className="text-3xl font-bold text-white mb-2">Welcome Back</h1>
           <p className="text-zinc-400 mb-8 text-sm">Enter your student email to join the camp.</p>
           
-          {!showOtpInput ? (
+          {/* 🔐 PASSCODE INPUT */}
+          {showPasscodeInput ? (
+            <div className="space-y-4 animate-fade-in">
+              <div className="text-emerald-400 text-xs font-bold uppercase tracking-widest mb-2">
+                Enter your passcode
+              </div>
+              <input 
+                type="password"
+                inputMode="numeric"
+                placeholder="••••••" 
+                className="mobile-input input-solid w-full rounded-xl p-4 text-center text-2xl tracking-[0.5em]" 
+                maxLength={6} 
+                value={passcodeInput} 
+                onChange={(e) => setPasscodeInput(e.target.value.replace(/\D/g, ''))} 
+                onKeyDown={(e) => e.key === "Enter" && handlePasscodeLogin()} 
+              />
+              <button 
+                onClick={handlePasscodeLogin} 
+                disabled={loading || passcodeInput.length < 6} 
+                className="btn-emerald w-full rounded-xl py-4"
+              >
+                {loading ? "Verifying..." : "Login with Passcode 🔐"}
+              </button>
+              <button 
+                onClick={handleSwitchToOTP} 
+                className="text-xs text-zinc-500 hover:text-white mt-4 block mx-auto"
+              >
+                Use OTP instead
+              </button>
+            </div>
+          ) : !showOtpInput ? (
+            /* EMAIL INPUT */
             <div className="space-y-4">
               <input 
                 type="email" 
@@ -72,10 +200,11 @@ export function LoginView({
                 disabled={loading || !emailInput} 
                 className="btn-emerald w-full rounded-xl py-4"
               >
-                {loading ? "Sending..." : "Get Login Code ⚡"}
+                {loading ? "Checking..." : "Continue ⚡"}
               </button>
             </div>
           ) : (
+            /* OTP INPUT */
             <div className="space-y-4 animate-fade-in">
               <div className="text-emerald-400 text-xs font-bold uppercase tracking-widest mb-2">
                 Check your inbox

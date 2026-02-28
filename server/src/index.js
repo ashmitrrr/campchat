@@ -15,7 +15,6 @@ if (!process.env.JWT_SECRET) {
 const JWT_SECRET = process.env.JWT_SECRET;
 console.log("✅ JWT_SECRET loaded from environment");
 
-// Initialize Supabase Admin Client
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
@@ -40,16 +39,28 @@ const roomToSockets = new Map();
 const roomPersistence = new Map();
 const blacklist = new Set();
 
+// 🔥 NEW: CAMPUS ROOMS STATE
+const CAMPUS_ROOMS = {
+  "campus-social": { name: "Campus Social", icon: "🥂", users: new Map() },
+  "campus-career": { name: "Campus Career", icon: "💼", users: new Map() },
+  "campus-founder": { name: "Campus Founder", icon: "🚀", users: new Map() },
+  "campus-global": { name: "Campus Global", icon: "🌏", users: new Map() },
+  "campus-sports": { name: "Campus Sports", icon: "⚽", users: new Map() },
+  "campus-study": { name: "Campus Study", icon: "📚", users: new Map() }
+};
+
+// Track which campus rooms each user is in
+const userCampusRooms = new Map(); // email -> Set of roomIds
+
 // RATE LIMITING STATE
 const messageRateLimits = new Map();
 const reportRateLimits = new Map();
 
-const MESSAGE_LIMIT = 30; // 30 messages per minute
-const REPORT_LIMIT = 3; // 3 reports per hour
-const ROOM_PERSISTENCE_TIME = 120000; // 2 minutes
-const MAX_MESSAGE_LENGTH = 500; // Character limit for messages
+const MESSAGE_LIMIT = 30;
+const REPORT_LIMIT = 3;
+const ROOM_PERSISTENCE_TIME = 120000;
+const MAX_MESSAGE_LENGTH = 500;
 
-// ---- RATE LIMITING HELPERS ----
 function checkRateLimit(limitMap, email, limit, windowMs) {
   const now = Date.now();
   const userLimit = limitMap.get(email);
@@ -67,7 +78,6 @@ function checkRateLimit(limitMap, email, limit, windowMs) {
   return true;
 }
 
-// ---- SYNC BANS ON STARTUP ----
 async function loadBans() {
   const { data, error } = await supabase.from("banned_users").select("email");
   if (data) {
@@ -122,7 +132,6 @@ app.get("/api/gifs/trending", async (req, res) => {
   }
 });
 
-// ---- JWT GENERATION ENDPOINT ----
 app.post("/api/generate-token", async (req, res) => {
   const { email } = req.body;
   
@@ -140,7 +149,6 @@ app.post("/api/generate-token", async (req, res) => {
   res.json({ token });
 });
 
-// ---- SOCKET MIDDLEWARE ----
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
   
@@ -164,19 +172,16 @@ io.use((socket, next) => {
   }
 });
 
-// ---- MATCHING LOGIC ----
+// ---- MATCHING LOGIC (1-on-1 Chat) ----
 function isCompatible(userA, userB) {
-  // Check all filters from both users
   const filtersA = userA.filters || {};
   const filtersB = userB.filters || {};
   
-  // Check User A's filters against User B
   if (filtersA.gender && filtersA.gender !== "Any" && filtersA.gender !== userB.gender) return false;
   if (filtersA.country && filtersA.country !== "Any" && filtersA.country !== userB.country) return false;
   if (filtersA.uni && filtersA.uni !== "Any" && filtersA.uni !== userB.uni) return false;
   if (filtersA.major && filtersA.major !== "Any" && filtersA.major !== userB.major) return false;
   
-  // Check User B's filters against User A
   if (filtersB.gender && filtersB.gender !== "Any" && filtersB.gender !== userA.gender) return false;
   if (filtersB.country && filtersB.country !== "Any" && filtersB.country !== userA.country) return false;
   if (filtersB.uni && filtersB.uni !== "Any" && filtersB.uni !== userA.uni) return false;
@@ -216,7 +221,6 @@ function tryMatch() {
           createdAt: Date.now()
         });
 
-        // ✅ FIXED: Now sending partnerProfilePic
         p1.emit("matched", { 
           roomId, 
           partnerUni: p2.userData.uni, 
@@ -239,7 +243,6 @@ function tryMatch() {
   }
 }
 
-// ---- CLEANUP OLD ROOMS ----
 setInterval(() => {
   const now = Date.now();
   for (const [roomId, data] of roomPersistence.entries()) {
@@ -249,15 +252,27 @@ setInterval(() => {
   }
 }, 30000);
 
-// ---- BROADCAST ONLINE COUNT ----
 function broadcastOnlineCount() {
   io.emit("online_count", { count: io.engine.clientsCount });
+}
+
+// 🔥 NEW: CAMPUS ROOM HELPERS
+function broadcastCampusUsers(campusId) {
+  const room = CAMPUS_ROOMS[campusId];
+  if (!room) return;
+  
+  const userList = Array.from(room.users.values()).map(u => ({
+    name: u.name,
+    uni: u.uni,
+    profilePic: u.profilePic
+  }));
+  
+  io.to(campusId).emit("campus_users", { users: userList, count: userList.length });
 }
 
 io.on("connection", (socket) => {
   
   socket.on("set_profile", (profileData) => {
-    // ✅ FIXED: Now storing profilePic in userData
     socket.userData = {
       uni: profileData.uni || "Unknown",
       name: profileData.name || "Stranger",
@@ -271,7 +286,8 @@ io.on("connection", (socket) => {
         country: "Any",
         uni: "Any",
         major: "Any"
-      }
+      },
+      isPremium: profileData.isPremium || false
     };
     
     if (!queue.find((s) => s.id === socket.id)) {
@@ -281,6 +297,95 @@ io.on("connection", (socket) => {
   });
 
   broadcastOnlineCount();
+
+  // 🔥 NEW: JOIN CAMPUS ROOM
+  socket.on("join_campus", ({ campusId }) => {
+    const room = CAMPUS_ROOMS[campusId];
+    if (!room) {
+      socket.emit("error", { message: "Campus room not found" });
+      return;
+    }
+
+    // Check if user already in a campus room (free users)
+    const userRooms = userCampusRooms.get(socket.email) || new Set();
+    
+    if (!socket.userData?.isPremium && userRooms.size >= 1) {
+      socket.emit("error", { message: "Free users can only join 1 campus at a time. Upgrade to Premium!" });
+      return;
+    }
+
+    // Join the room
+    socket.join(campusId);
+    room.users.set(socket.email, {
+      socketId: socket.id,
+      name: socket.userData?.name || "Anonymous",
+      uni: socket.userData?.uni || "Unknown",
+      profilePic: socket.userData?.profilePic || null
+    });
+
+    userRooms.add(campusId);
+    userCampusRooms.set(socket.email, userRooms);
+
+    socket.emit("campus_joined", { campusId, name: room.name });
+    broadcastCampusUsers(campusId);
+    
+    console.log(`🏕️ ${socket.email} joined ${room.name}`);
+  });
+
+  // 🔥 NEW: LEAVE CAMPUS ROOM
+  socket.on("leave_campus", ({ campusId }) => {
+    const room = CAMPUS_ROOMS[campusId];
+    if (!room) return;
+
+    socket.leave(campusId);
+    room.users.delete(socket.email);
+
+    const userRooms = userCampusRooms.get(socket.email);
+    if (userRooms) {
+      userRooms.delete(campusId);
+      if (userRooms.size === 0) {
+        userCampusRooms.delete(socket.email);
+      }
+    }
+
+    broadcastCampusUsers(campusId);
+    console.log(`🏕️ ${socket.email} left ${room.name}`);
+  });
+
+  // 🔥 NEW: SEND CAMPUS MESSAGE
+  socket.on("send_campus_message", ({ campusId, message, isGif, isImage, timerSeconds, fileName }) => {
+    if (!message || typeof message !== "string") return;
+
+    const trimmed = message.trim();
+    if (trimmed.length === 0 || trimmed.length > MAX_MESSAGE_LENGTH) return;
+
+    if (!checkRateLimit(messageRateLimits, socket.email, MESSAGE_LIMIT, 60000)) {
+      socket.emit("rate_limited", { type: "message" });
+      return;
+    }
+
+    const room = CAMPUS_ROOMS[campusId];
+    if (!room || !room.users.has(socket.email)) return;
+
+    const messageData = {
+      text: trimmed,
+      ts: Date.now(),
+      from: socket.userData?.name || "Anonymous",
+      email: socket.email,
+      profilePic: socket.userData?.profilePic || null,
+      isGif: !!isGif,
+      isImage: !!isImage,
+      timerSeconds: timerSeconds || 0,
+      fileName: fileName || ""
+    };
+
+    io.to(campusId).emit("campus_message", messageData);
+  });
+
+  // 🔥 NEW: GET CAMPUS ONLINE COUNT
+  socket.on("get_campus_users", ({ campusId }) => {
+    broadcastCampusUsers(campusId);
+  });
 
   socket.on("update_preference", ({ targetUni }) => {
     if (socket.userData) {
@@ -405,7 +510,6 @@ io.on("connection", (socket) => {
         
         const partner = persistedRoom.users.find(u => u.email !== socket.email);
         
-        // ✅ FIXED: Now sending partnerProfilePic on reconnect
         socket.emit("reconnected", { 
           roomId, 
           partnerUni: partner.uni, 
@@ -418,9 +522,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    // Remove from 1-on-1 queue
     const idx = queue.findIndex((s) => s.id === socket.id);
     if (idx !== -1) queue.splice(idx, 1);
     
+    // Remove from 1-on-1 room
     const roomId = socketToRoom.get(socket.id);
     if (roomId) {
       socket.to(roomId).emit("partner_left");
@@ -432,6 +538,19 @@ io.on("connection", (socket) => {
           roomToSockets.delete(roomId);
         }
       }, ROOM_PERSISTENCE_TIME);
+    }
+
+    // 🔥 NEW: Remove from all campus rooms
+    const userRooms = userCampusRooms.get(socket.email);
+    if (userRooms) {
+      userRooms.forEach(campusId => {
+        const room = CAMPUS_ROOMS[campusId];
+        if (room) {
+          room.users.delete(socket.email);
+          broadcastCampusUsers(campusId);
+        }
+      });
+      userCampusRooms.delete(socket.email);
     }
 
     broadcastOnlineCount();

@@ -1,4 +1,3 @@
-// Location: /apps/web/app/page.tsx
 "use client";
 
 import { useEffect, useState, useRef } from "react";
@@ -8,15 +7,12 @@ import { Toaster, toast } from "sonner";
 import { COUNTRIES_CITIES, COUNTRY_FLAGS } from "./lib/countries";
 import { UNIVERSITIES_BY_COUNTRY } from "./lib/universities";
 import { SERVER_URL } from "./lib/constants";
-import bcrypt from "bcryptjs";
 
-// Import all components
 import { LandingPage } from "./components/landing";
 import { LoginView, ProfileSetup, TermsView } from "./components/views";
 import { ChatView, StartChatView, TimerModal } from "./components/chat";
 import { MobileNavbar, BottomTabBar, CampusesView, ProfileView } from "./components/profile";
 
-// Mobile keyboard hook
 function useMobileKeyboard() {
   useEffect(() => {
     const setVH = () => {
@@ -36,16 +32,13 @@ function useMobileKeyboard() {
 export default function Home() {
   useMobileKeyboard();
   
-  // ---- AUTH & USER STATE ----
   const [user, setUser] = useState<any>(null);
   const [jwtToken, setJwtToken] = useState<string | null>(null);
   
-  // View States
   const [currentView, setCurrentView] = useState<"landing" | "login" | "profile" | "terms" | "app">("landing");
   const [activeTab, setActiveTab] = useState<"home" | "campuses" | "profile">("home");
   const [showEditProfile, setShowEditProfile] = useState(false);
   
-  // Profile State
   const [displayName, setDisplayName] = useState("");
   const [gender, setGender] = useState("");
   const [major, setMajor] = useState("");
@@ -56,40 +49,24 @@ export default function Home() {
   const [availableCities, setAvailableCities] = useState<string[]>([]);
   const [availableUniversities, setAvailableUniversities] = useState<string[]>([]);
 
-  // Profile Picture State
   const [profilePic, setProfilePic] = useState<string | null>(null);
-
-  // Chat Theme State (1-5, 1&2 free, 3-5 premium)
   const [chatTheme, setChatTheme] = useState<number>(1);
   
-  // Premium State
   const [isPremium, setIsPremium] = useState(false);
   const [premiumUntil, setPremiumUntil] = useState<Date | null>(null);
   
-  // Terms State
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   
-  // Login Flow State
   const [emailInput, setEmailInput] = useState("");
   const [otpInput, setOtpInput] = useState("");
   const [showOtpInput, setShowOtpInput] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  // 🔐 NEW: Passcode States
-  const [hasPasscode, setHasPasscode] = useState(false);
-  const [passcodeInput, setPasscodeInput] = useState("");
-  const [showPasscodeInput, setShowPasscodeInput] = useState(false);
-  const [showPasscodeSetup, setShowPasscodeSetup] = useState(false);
-  const [newPasscode, setNewPasscode] = useState("");
-  const [confirmPasscode, setConfirmPasscode] = useState("");
   
-  // Filter States
   const [filterGender, setFilterGender] = useState("Any");
   const [filterCountry, setFilterCountry] = useState("Any");
   const [filterUni, setFilterUni] = useState("Any");
   const [filterMajor, setFilterMajor] = useState("Any");
   
-  // Chat State
   const [socket, setSocket] = useState<Socket | null>(null);
   const [status, setStatus] = useState("Idle");
   const [roomId, setRoomId] = useState<string | null>(null);
@@ -104,16 +81,33 @@ export default function Home() {
   const [isReadyToChat, setIsReadyToChat] = useState(false);
   const [targetUniFilter, setTargetUniFilter] = useState("Any");
   
-  // GIF State
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [gifSearch, setGifSearch] = useState("");
   const [gifs, setGifs] = useState<any[]>([]);
   const [isSearchingGifs, setIsSearchingGifs] = useState(false);
 
-  // Disappearing image states
   const [showTimerModal, setShowTimerModal] = useState(false);
   const [pendingImage, setPendingImage] = useState<File | null>(null);
   const [imageTimers, setImageTimers] = useState<Map<string, NodeJS.Timeout>>(new Map());
+
+  // 🔥 NEW: CAMPUS ROOM STATE
+  const [activeCampusId, setActiveCampusId] = useState<string | null>(null);
+  const [campusMessages, setCampusMessages] = useState<{
+    text: string;
+    ts: number;
+    from: string;
+    email: string;
+    profilePic?: string;
+    isGif?: boolean;
+    isImage?: boolean;
+  }[]>([]);
+  const [campusUsers, setCampusUsers] = useState<{
+    name: string;
+    uni: string;
+    profilePic?: string;
+  }[]>([]);
+  const [campusInput, setCampusInput] = useState("");
+  const [joinedCampuses, setJoinedCampuses] = useState<Set<string>>(new Set());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -121,7 +115,6 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [messageTimers, setMessageTimers] = useState<Map<number, NodeJS.Timeout>>(new Map());
 
-  // CHECK SESSION & LOAD PROFILE
   useEffect(() => {
     const checkUser = async () => {
       const { data } = await supabase.auth.getSession();
@@ -156,7 +149,6 @@ export default function Home() {
     return () => { authListener.subscription.unsubscribe(); };
   }, []);
 
-  // Generate JWT Token
   const generateJWT = async (session: any) => {
     try {
       const response = await fetch(`${SERVER_URL}/api/generate-token`, {
@@ -177,7 +169,6 @@ export default function Home() {
     }
   };
 
-  // Load User Profile from DB
   const loadUserProfile = async (email: string): Promise<boolean> => {
     const { data, error } = await supabase
       .from("user_profiles")
@@ -196,7 +187,6 @@ export default function Home() {
       if (data.profile_pic) setProfilePic(data.profile_pic);
       if (data.chat_theme) setChatTheme(data.chat_theme);
       
-      // Check premium status
       if (data.premium_until) {
         const premiumDate = new Date(data.premium_until);
         setIsPremium(premiumDate > new Date());
@@ -214,45 +204,6 @@ export default function Home() {
     return false;
   };
 
-  // 🔐 NEW: Check if user has passcode
-  const checkPasscodeExists = async (email: string): Promise<boolean> => {
-    const { data } = await supabase
-      .from("user_profiles")
-      .select("passcode_hash")
-      .eq("email", email)
-      .single();
-    
-    return !!(data?.passcode_hash);
-  };
-
-  // 🔐 NEW: Verify passcode
-  const verifyPasscode = async (email: string, passcode: string): Promise<boolean> => {
-    const { data } = await supabase
-      .from("user_profiles")
-      .select("passcode_hash")
-      .eq("email", email)
-      .single();
-    
-    if (!data?.passcode_hash) return false;
-    
-    return await bcrypt.compare(passcode, data.passcode_hash);
-  };
-
-  // 🔐 NEW: Save passcode
-  const savePasscode = async (email: string, passcode: string) => {
-    const salt = await bcrypt.genSalt(10);
-    const hash = await bcrypt.hash(passcode, salt);
-    
-    await supabase
-      .from("user_profiles")
-      .upsert({
-        email: email,
-        passcode_hash: hash,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'email' });
-  };
-
-  // Save User Profile to DB
   const saveUserProfile = async () => {
     if (!user) return;
     
@@ -282,7 +233,6 @@ export default function Home() {
     }
   };
 
-  // Handle Profile Picture Upload
   const handleProfilePicUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user) return;
@@ -324,7 +274,6 @@ export default function Home() {
     }
   };
 
-  // Handle Chat Theme Change
   const handleThemeChange = async (themeId: number) => {
     if (themeId > 2 && !isPremium) {
       toast.error("🔒 Premium Feature - Coffee is $5. This is $3/week. Be smart.", { duration: 3000 });
@@ -340,7 +289,6 @@ export default function Home() {
     toast.success("Theme updated!");
   };
 
-  // Update available cities/unis when country changes
   useEffect(() => {
     if (country) {
       if (COUNTRIES_CITIES[country]) {
@@ -358,14 +306,12 @@ export default function Home() {
     }
   }, [country]);
 
-  // Scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isPartnerTyping]);
+  }, [messages, isPartnerTyping, campusMessages]);
 
-  // CONNECT SOCKET WITH JWT
   useEffect(() => {
-    if (!isReadyToChat || !user || !jwtToken) return;
+    if (!user || !jwtToken) return;
 
     const domain = user.email.split("@")[1];
     const cleanDomain = domain ? domain.replace(/student\.|my\.|mail\.|\.edu\.au|\.edu|\.ca|\.ac\.uk|\.ac\.in/g, "") : "anon";
@@ -395,6 +341,7 @@ export default function Home() {
         country: country,
         city: city,
         profilePic: profilePic,
+        isPremium: isPremium,
         filters: {
           gender: filterGender,
           country: filterCountry,
@@ -483,10 +430,29 @@ export default function Home() {
       }
     });
 
+    // 🔥 NEW: CAMPUS SOCKET EVENTS
+    s.on("campus_joined", ({ campusId, name }) => {
+      setActiveCampusId(campusId);
+      setCampusMessages([]);
+      setJoinedCampuses(prev => new Set(prev).add(campusId));
+      toast.success(`Joined ${name}! 🏕️`);
+    });
+
+    s.on("campus_users", ({ users, count }) => {
+      setCampusUsers(users);
+    });
+
+    s.on("campus_message", (msg) => {
+      setCampusMessages(prev => [...prev, msg]);
+    });
+
+    s.on("error", ({ message }) => {
+      toast.error(message);
+    });
+
     return () => { s.disconnect(); };
   }, [isReadyToChat, user, jwtToken, targetUniFilter]);
 
-  // Auto-delete messages after 2 minutes
   useEffect(() => {
     messages.forEach((msg) => {
       const msgKey = msg.ts;
@@ -504,7 +470,6 @@ export default function Home() {
     return () => { messageTimers.forEach(timer => clearTimeout(timer)); };
   }, [messages]);
 
-  // Search GIFs
   const searchGifs = async (query: string) => {
     if (!query.trim()) return;
     setIsSearchingGifs(true);
@@ -525,7 +490,6 @@ export default function Home() {
     }
   };
 
-  // Load trending GIFs
   const loadTrendingGifs = async () => {
     setIsSearchingGifs(true);
     try {
@@ -540,7 +504,6 @@ export default function Home() {
     }
   };
 
-  // Send GIF
   const sendGif = (gifUrl: string) => {
     if (!roomId || !socket) return;
     const msg = { text: gifUrl, ts: Date.now(), from: "me" as const, isGif: true };
@@ -551,7 +514,6 @@ export default function Home() {
     setGifs([]);
   };
 
-  // Handle Image Upload (Premium Only)
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!isPremium) { showPremiumPaywall(); return; }
     const file = e.target.files?.[0];
@@ -590,13 +552,48 @@ export default function Home() {
     setImageTimers(prev => new Map(prev).set(imageUrl, timer));
   };
 
-  // Show Premium Paywall
   const showPremiumPaywall = () => {
     toast.error("🔒 Premium Feature - Coffee is $5. This is $3/week. Be smart.", { duration: 3000 });
     setTimeout(() => { toast("Stripe checkout coming soon!"); }, 1000);
   };
 
-  // ---- HELPERS ----
+  // 🔥 NEW: CAMPUS HANDLERS
+  const handleJoinCampus = (campusId: string) => {
+    if (!socket) {
+      toast.error("Not connected. Please refresh.");
+      return;
+    }
+    
+    socket.emit("join_campus", { campusId });
+    socket.emit("get_campus_users", { campusId });
+  };
+
+  const handleLeaveCampus = () => {
+    if (!socket || !activeCampusId) return;
+    
+    socket.emit("leave_campus", { campusId: activeCampusId });
+    setActiveCampusId(null);
+    setCampusMessages([]);
+    setCampusUsers([]);
+    setJoinedCampuses(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(activeCampusId);
+      return newSet;
+    });
+    toast("Left campus");
+  };
+
+  const handleSendCampusMessage = () => {
+    if (!campusInput.trim() || !activeCampusId || !socket) return;
+    
+    socket.emit("send_campus_message", {
+      campusId: activeCampusId,
+      message: campusInput
+    });
+    
+    setCampusInput("");
+  };
+
   const handleLogoutCleanup = () => {
     setUser(null);
     setCurrentView("landing");
@@ -606,9 +603,6 @@ export default function Home() {
     setLoading(false);
     setJwtToken(null);
     setIsReadyToChat(false);
-    setShowPasscodeInput(false);
-    setPasscodeInput("");
-    setHasPasscode(false);
     localStorage.removeItem('campchat_jwt');
   };
 
@@ -617,7 +611,6 @@ export default function Home() {
     handleLogoutCleanup();
   };
 
-  // 🔐 NEW: Handle email submit - check for passcode first
   const handleSendCode = async () => {
     setLoading(true);
     const email = emailInput.toLowerCase().trim();
@@ -636,18 +629,6 @@ export default function Home() {
       return; 
     }
 
-    // Check if user has passcode
-    const hasExistingPasscode = await checkPasscodeExists(email);
-    
-    if (hasExistingPasscode) {
-      // Show passcode input instead of OTP
-      setHasPasscode(true);
-      setShowPasscodeInput(true);
-      setLoading(false);
-      return;
-    }
-
-    // No passcode - send OTP as usual
     const { error } = await supabase.auth.signInWithOtp({ email });
     if (error) { 
       toast.error(error.message); 
@@ -658,89 +639,16 @@ export default function Home() {
     setLoading(false);
   };
 
-  // 🔐 NEW: Handle passcode login
-  const handlePasscodeLogin = async () => {
-    if (passcodeInput.length !== 6) {
-      toast.error("Passcode must be 6 digits");
-      return;
-    }
-
-    setLoading(true);
-    const isValid = await verifyPasscode(emailInput, passcodeInput);
-    
-    if (!isValid) {
-      toast.error("Incorrect passcode");
-      setPasscodeInput("");
-      setLoading(false);
-      return;
-    }
-
-    // Passcode valid - sign in with OTP but skip the code
-    const { error } = await supabase.auth.signInWithOtp({ 
-      email: emailInput,
-      options: { shouldCreateUser: false }
-    });
-
-    if (error) {
-      toast.error("Login failed. Please try OTP instead.");
-      setLoading(false);
-      return;
-    }
-
-    // Create a session directly (this is a workaround)
-    // For production, you'd want a server endpoint that creates a session after passcode verification
-    toast.success("Logging in...");
-    
-    // Send OTP and auto-fill (user won't see this)
-    setTimeout(async () => {
-      const { data: session } = await supabase.auth.getSession();
-      if (session?.session?.user) {
-        setUser(session.session.user);
-        const hasProfile = await loadUserProfile(session.session.user.email);
-        await generateJWT(session.session);
-        if (hasProfile) { 
-          setCurrentView("terms"); 
-        } else { 
-          setCurrentView("profile"); 
-        }
-      }
-      setLoading(false);
-    }, 1000);
-  };
-
-  // 🔐 NEW: Switch to OTP from passcode screen
-  const handleSwitchToOTP = async () => {
-    setShowPasscodeInput(false);
-    setPasscodeInput("");
-    setLoading(true);
-    
-    const { error } = await supabase.auth.signInWithOtp({ email: emailInput });
-    if (error) { 
-      toast.error(error.message); 
-    } else { 
-      setShowOtpInput(true); 
-      toast.success(`Code sent to ${emailInput}! 📩`); 
-    }
-    setLoading(false);
-  };
-
   const handleVerifyCode = async () => {
     setLoading(true);
     try {
       const { data, error } = await supabase.auth.verifyOtp({ email: emailInput, token: otpInput, type: 'email' });
-      if (error) { toast.error(error.message); setLoading(false); return; }
-      
-      // Check if this is first-time login (no passcode set)
-      const hasExistingPasscode = await checkPasscodeExists(emailInput);
-      
-      if (!hasExistingPasscode) {
-        // First time - offer passcode setup
-        setShowPasscodeSetup(true);
-        setLoading(false);
-        return;
+      if (error) { 
+        toast.error(error.message); 
+        setLoading(false); 
+        return; 
       }
-
-      // Has passcode already - proceed normally
+      
       toast.success("Verified! Setting up...");
       setTimeout(async () => {
         const { data: session } = await supabase.auth.getSession();
@@ -748,7 +656,11 @@ export default function Home() {
           setUser(session.session.user);
           const hasProfile = await loadUserProfile(session.session.user.email);
           await generateJWT(session.session);
-          if (hasProfile) { setCurrentView("terms"); } else { setCurrentView("profile"); }
+          if (hasProfile) { 
+            setCurrentView("terms"); 
+          } else { 
+            setCurrentView("profile"); 
+          }
           setLoading(false);
         } else {
           toast.error("Session error. Please try again.");
@@ -760,51 +672,6 @@ export default function Home() {
       toast.error("Verification failed. Try again.");
       setLoading(false);
     }
-  };
-
-  // 🔐 NEW: Handle passcode setup
-  const handleSetupPasscode = async () => {
-    if (newPasscode.length !== 6 || confirmPasscode.length !== 6) {
-      toast.error("Passcode must be 6 digits");
-      return;
-    }
-
-    if (newPasscode !== confirmPasscode) {
-      toast.error("Passcodes don't match");
-      return;
-    }
-
-    setLoading(true);
-    await savePasscode(emailInput, newPasscode);
-    toast.success("Passcode saved! 🎉");
-    
-    setTimeout(async () => {
-      const { data: session } = await supabase.auth.getSession();
-      if (session?.session?.user) {
-        setUser(session.session.user);
-        const hasProfile = await loadUserProfile(session.session.user.email);
-        await generateJWT(session.session);
-        if (hasProfile) { setCurrentView("terms"); } else { setCurrentView("profile"); }
-      }
-      setLoading(false);
-      setShowPasscodeSetup(false);
-    }, 500);
-  };
-
-  // 🔐 NEW: Skip passcode setup
-  const handleSkipPasscodeSetup = async () => {
-    setShowPasscodeSetup(false);
-    toast.success("Verified! Setting up...");
-    
-    setTimeout(async () => {
-      const { data: session } = await supabase.auth.getSession();
-      if (session?.session?.user) {
-        setUser(session.session.user);
-        const hasProfile = await loadUserProfile(session.session.user.email);
-        await generateJWT(session.session);
-        if (hasProfile) { setCurrentView("terms"); } else { setCurrentView("profile"); }
-      }
-    }, 500);
   };
 
   const handleTyping = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -875,8 +742,6 @@ export default function Home() {
     setShowEditProfile(false);
   };
 
-  // ==================== VIEW ROUTING ====================
-
   if (currentView === "landing") {
     return <LandingPage onLoginClick={() => setCurrentView("login")} />;
   }
@@ -895,20 +760,6 @@ export default function Home() {
         handleSendCode={handleSendCode}
         handleVerifyCode={handleVerifyCode}
         onBackToLanding={() => setCurrentView("landing")}
-        // 🔐 NEW: Passcode props
-        hasPasscode={hasPasscode}
-        showPasscodeInput={showPasscodeInput}
-        passcodeInput={passcodeInput}
-        setPasscodeInput={setPasscodeInput}
-        handlePasscodeLogin={handlePasscodeLogin}
-        handleSwitchToOTP={handleSwitchToOTP}
-        showPasscodeSetup={showPasscodeSetup}
-        newPasscode={newPasscode}
-        setNewPasscode={setNewPasscode}
-        confirmPasscode={confirmPasscode}
-        setConfirmPasscode={setConfirmPasscode}
-        handleSetupPasscode={handleSetupPasscode}
-        handleSkipPasscodeSetup={handleSkipPasscodeSetup}
       />
     );
   }
@@ -1018,7 +869,20 @@ export default function Home() {
             )
           )}
 
-          {activeTab === "campuses" && <CampusesView />}
+          {activeTab === "campuses" && (
+            <CampusesView 
+              onJoinCampus={handleJoinCampus}
+              activeCampusId={activeCampusId}
+              campusMessages={campusMessages}
+              campusUsers={campusUsers}
+              campusInput={campusInput}
+              setCampusInput={setCampusInput}
+              onSendMessage={handleSendCampusMessage}
+              onLeaveCampus={handleLeaveCampus}
+              messagesEndRef={messagesEndRef}
+              myProfilePic={profilePic}
+            />
+          )}
 
           {activeTab === "profile" && (
             <ProfileView

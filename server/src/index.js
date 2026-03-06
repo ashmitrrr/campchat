@@ -39,7 +39,7 @@ const roomToSockets = new Map();
 const roomPersistence = new Map();
 const blacklist = new Set();
 
-// 🔥 NEW: CAMPUS ROOMS STATE
+// 🔥 CAMPUS ROOMS STATE
 const CAMPUS_ROOMS = {
   "campus-social": { name: "Campus Social", icon: "🥂", users: new Map() },
   "campus-career": { name: "Campus Career", icon: "💼", users: new Map() },
@@ -50,7 +50,7 @@ const CAMPUS_ROOMS = {
 };
 
 // Track which campus rooms each user is in
-const userCampusRooms = new Map(); // email -> Set of roomIds
+const userCampusRooms = new Map();
 
 // RATE LIMITING STATE
 const messageRateLimits = new Map();
@@ -88,6 +88,121 @@ async function loadBans() {
   }
 }
 loadBans();
+
+// 🔥 NEW: CAMPUS MESSAGE HELPERS
+async function saveCampusMessage(campusId, userEmail, userName, profilePic, message, isGif = false) {
+  try {
+    const { error } = await supabase.from("campus_messages").insert({
+      campus_id: campusId,
+      user_email: userEmail,
+      user_name: userName,
+      user_profile_pic: profilePic,
+      message: message,
+      is_gif: isGif,
+      created_at: new Date().toISOString()
+    });
+    
+    if (error) {
+      console.error("Failed to save campus message:", error);
+    }
+  } catch (err) {
+    console.error("Error saving campus message:", err);
+  }
+}
+
+async function loadCampusHistory(campusId) {
+  try {
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    
+    const { data, error } = await supabase
+      .from("campus_messages")
+      .select("*")
+      .eq("campus_id", campusId)
+      .gte("created_at", twentyFourHoursAgo)
+      .order("created_at", { ascending: true })
+      .limit(50);
+    
+    if (error) {
+      console.error("Failed to load campus history:", error);
+      return [];
+    }
+    
+    return data.map(msg => ({
+      text: msg.message,
+      ts: new Date(msg.created_at).getTime(),
+      from: msg.user_name,
+      email: msg.user_email,
+      profilePic: msg.user_profile_pic,
+      isGif: msg.is_gif
+    }));
+  } catch (err) {
+    console.error("Error loading campus history:", err);
+    return [];
+  }
+}
+
+// 🔥 NEW: CAMPUS MEMBERSHIP HELPERS
+async function joinCampusMembership(userEmail, campusId) {
+  try {
+    await supabase.from("campus_memberships").upsert({
+      user_email: userEmail,
+      campus_id: campusId,
+      joined_at: new Date().toISOString(),
+      last_seen: new Date().toISOString()
+    }, {
+      onConflict: 'user_email,campus_id'
+    });
+  } catch (err) {
+    console.error("Error joining campus membership:", err);
+  }
+}
+
+async function updateLastSeen(userEmail, campusId) {
+  try {
+    await supabase
+      .from("campus_memberships")
+      .update({ last_seen: new Date().toISOString() })
+      .eq("user_email", userEmail)
+      .eq("campus_id", campusId);
+  } catch (err) {
+    console.error("Error updating last seen:", err);
+  }
+}
+
+async function getUserCampuses(userEmail) {
+  try {
+    const { data, error } = await supabase
+      .from("campus_memberships")
+      .select("campus_id")
+      .eq("user_email", userEmail);
+    
+    if (error) return [];
+    return data.map(row => row.campus_id);
+  } catch (err) {
+    console.error("Error getting user campuses:", err);
+    return [];
+  }
+}
+
+// 🔥 AUTO-DELETE OLD MESSAGES (runs every hour)
+setInterval(async () => {
+  try {
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    
+    const { error } = await supabase
+      .from("campus_messages")
+      .delete()
+      .lt("created_at", twentyFourHoursAgo);
+    
+    if (error) {
+      console.error("Failed to delete old campus messages:", error);
+    } else {
+      console.log("🧹 Cleaned up old campus messages");
+    }
+  } catch (err) {
+    console.error("Error cleaning old messages:", err);
+  }
+}, 60 * 60 * 1000); // Every hour
 
 // ============== GIF API ROUTES ==============
 app.get("/api/gifs/search", async (req, res) => {
@@ -256,7 +371,7 @@ function broadcastOnlineCount() {
   io.emit("online_count", { count: io.engine.clientsCount });
 }
 
-// 🔥 NEW: CAMPUS ROOM HELPERS
+// 🔥 CAMPUS ROOM HELPERS
 function broadcastCampusUsers(campusId) {
   const room = CAMPUS_ROOMS[campusId];
   if (!room) return;
@@ -298,8 +413,8 @@ io.on("connection", (socket) => {
 
   broadcastOnlineCount();
 
-  // 🔥 NEW: JOIN CAMPUS ROOM
-  socket.on("join_campus", ({ campusId }) => {
+  // 🔥 NEW: JOIN CAMPUS ROOM WITH HISTORY
+  socket.on("join_campus", async ({ campusId }) => {
     const room = CAMPUS_ROOMS[campusId];
     if (!room) {
       socket.emit("error", { message: "Campus room not found" });
@@ -326,14 +441,25 @@ io.on("connection", (socket) => {
     userRooms.add(campusId);
     userCampusRooms.set(socket.email, userRooms);
 
-    socket.emit("campus_joined", { campusId, name: room.name });
+    // 🔥 Save membership to DB
+    await joinCampusMembership(socket.email, campusId);
+
+    // 🔥 Load and send message history
+    const history = await loadCampusHistory(campusId);
+    
+    socket.emit("campus_joined", { 
+      campusId, 
+      name: room.name,
+      history: history // Send history with join confirmation
+    });
+    
     broadcastCampusUsers(campusId);
     
     console.log(`🏕️ ${socket.email} joined ${room.name}`);
   });
 
-  // 🔥 NEW: LEAVE CAMPUS ROOM
-  socket.on("leave_campus", ({ campusId }) => {
+  // 🔥 LEAVE CAMPUS ROOM
+  socket.on("leave_campus", async ({ campusId }) => {
     const room = CAMPUS_ROOMS[campusId];
     if (!room) return;
 
@@ -348,12 +474,15 @@ io.on("connection", (socket) => {
       }
     }
 
+    // 🔥 Update last seen in DB
+    await updateLastSeen(socket.email, campusId);
+
     broadcastCampusUsers(campusId);
     console.log(`🏕️ ${socket.email} left ${room.name}`);
   });
 
-  // 🔥 NEW: SEND CAMPUS MESSAGE
-  socket.on("send_campus_message", ({ campusId, message, isGif, isImage, timerSeconds, fileName }) => {
+  // 🔥 NEW: SEND CAMPUS MESSAGE WITH DB STORAGE
+  socket.on("send_campus_message", async ({ campusId, message, isGif, isImage, timerSeconds, fileName }) => {
     if (!message || typeof message !== "string") return;
 
     const trimmed = message.trim();
@@ -379,10 +508,27 @@ io.on("connection", (socket) => {
       fileName: fileName || ""
     };
 
+    // 🔥 Save to database
+    await saveCampusMessage(
+      campusId,
+      socket.email,
+      socket.userData?.name || "Anonymous",
+      socket.userData?.profilePic || null,
+      trimmed,
+      !!isGif
+    );
+
+    // Broadcast to all users in room
     io.to(campusId).emit("campus_message", messageData);
   });
 
-  // 🔥 NEW: GET CAMPUS ONLINE COUNT
+  // 🔥 NEW: GET USER'S CAMPUSES
+  socket.on("get_my_campuses", async () => {
+    const campuses = await getUserCampuses(socket.email);
+    socket.emit("my_campuses", { campuses });
+  });
+
+  // GET CAMPUS ONLINE COUNT
   socket.on("get_campus_users", ({ campusId }) => {
     broadcastCampusUsers(campusId);
   });
@@ -540,7 +686,7 @@ io.on("connection", (socket) => {
       }, ROOM_PERSISTENCE_TIME);
     }
 
-    // 🔥 NEW: Remove from all campus rooms
+    // 🔥 Remove from all campus rooms (but keep in DB for persistent membership)
     const userRooms = userCampusRooms.get(socket.email);
     if (userRooms) {
       userRooms.forEach(campusId => {

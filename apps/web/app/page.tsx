@@ -108,6 +108,8 @@ export default function Home() {
   }[]>([]);
   const [campusInput, setCampusInput] = useState("");
   const [joinedCampuses, setJoinedCampuses] = useState<Set<string>>(new Set());
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
+  const [myCampuses, setMyCampuses] = useState<string[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -130,6 +132,16 @@ export default function Home() {
       }
     };
     checkUser();
+
+    // 🔥 Request notification permission
+    if ("Notification" in window) {
+      setNotificationPermission(Notification.permission);
+      if (Notification.permission === "default") {
+        Notification.requestPermission().then(permission => {
+          setNotificationPermission(permission);
+        });
+      }
+    }
 
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
@@ -430,10 +442,10 @@ export default function Home() {
       }
     });
 
-    // 🔥 NEW: CAMPUS SOCKET EVENTS
-    s.on("campus_joined", ({ campusId, name }) => {
+    // 🔥 CAMPUS SOCKET EVENTS
+    s.on("campus_joined", ({ campusId, name, history }) => {
       setActiveCampusId(campusId);
-      setCampusMessages([]);
+      setCampusMessages(history || []); // Load history
       setJoinedCampuses(prev => new Set(prev).add(campusId));
       toast.success(`Joined ${name}! 🏕️`);
     });
@@ -444,14 +456,28 @@ export default function Home() {
 
     s.on("campus_message", (msg) => {
       setCampusMessages(prev => [...prev, msg]);
+      
+      // 🔥 Send browser notification if not in focus
+      if (notificationPermission === "granted" && document.hidden && msg.email !== user.email) {
+        new Notification(`${msg.from} in Campus`, {
+          body: msg.isGif ? "Sent a GIF" : msg.text,
+          icon: msg.profilePic || "/logo.png",
+          tag: "campus-message"
+        });
+      }
     });
 
     s.on("error", ({ message }) => {
       toast.error(message);
     });
 
+    // 🔥 Get user's joined campuses
+    s.on("my_campuses", ({ campuses }) => {
+      setMyCampuses(campuses);
+    });
+
     return () => { s.disconnect(); };
-  }, [isReadyToChat, user, jwtToken, targetUniFilter]);
+  }, [user, jwtToken, targetUniFilter]);
 
   useEffect(() => {
     messages.forEach((msg) => {
@@ -881,6 +907,7 @@ export default function Home() {
               onLeaveCampus={handleLeaveCampus}
               messagesEndRef={messagesEndRef}
               myProfilePic={profilePic}
+              myEmail={user?.email || null}
             />
           )}
 

@@ -136,7 +136,43 @@ export function BottomTabBar({ activeTab, onTabChange }: BottomTabBarProps) {
   );
 }
 
-// 🔥 NEW: CAMPUSES VIEW WITH ACTUAL FUNCTIONALITY
+// 🔥 Helper function to parse @mentions
+function parseMessage(text: string, users: { name: string }[]): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  const regex = /@(\w+)/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    // Add text before the mention
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+
+    const mentionedName = match[1];
+    const isValidUser = users.some(u => u.name.toLowerCase() === mentionedName.toLowerCase());
+
+    // Add the mention (highlighted if valid user)
+    parts.push(
+      <span 
+        key={match.index} 
+        className={isValidUser ? "text-blue-400 font-bold bg-blue-500/10 px-1 rounded" : ""}
+      >
+        @{mentionedName}
+      </span>
+    );
+
+    lastIndex = regex.lastIndex;
+  }
+
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : [text];
+}
+
 interface CampusesViewProps {
   onJoinCampus: (campusId: string) => void;
   activeCampusId: string | null;
@@ -160,6 +196,7 @@ interface CampusesViewProps {
   onLeaveCampus: () => void;
   messagesEndRef: RefObject<HTMLDivElement>;
   myProfilePic: string | null;
+  myEmail: string | null;
 }
 
 export function CampusesView({
@@ -172,7 +209,8 @@ export function CampusesView({
   onSendMessage,
   onLeaveCampus,
   messagesEndRef,
-  myProfilePic
+  myProfilePic,
+  myEmail
 }: CampusesViewProps) {
   const campuses = [
     { id: "campus-social", name: "Campus Social", icon: "🥂", color: "pink", desc: "Chill & banter" },
@@ -218,7 +256,7 @@ export function CampusesView({
           )}
 
           {campusMessages.map((msg, i) => {
-            const isMe = msg.email === myProfilePic; // This will be fixed with proper email check
+            const isMe = msg.email === myEmail;
             return (
               <div key={i} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
                 <div className={`flex items-end gap-1.5 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
@@ -237,7 +275,9 @@ export function CampusesView({
                     {msg.isGif ? (
                       <img src={msg.text} alt="GIF" className="max-w-full rounded-2xl" />
                     ) : (
-                      <div className="px-3 py-2 text-sm">{msg.text}</div>
+                      <div className="px-3 py-2 text-sm">
+                        {parseMessage(msg.text, campusUsers)}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -253,13 +293,14 @@ export function CampusesView({
           <div className="flex gap-2">
             <input 
               className="mobile-input input-solid flex-1 rounded-xl px-3 py-2 text-sm" 
-              placeholder="Type..." 
+              placeholder="Type... (use @username to mention)" 
               value={campusInput} 
               onChange={(e) => setCampusInput(e.target.value)} 
               onKeyDown={(e) => e.key === "Enter" && onSendMessage()}
             />
             <button onClick={onSendMessage} className="btn-emerald rounded-xl px-4 text-sm">Send</button>
           </div>
+          <p className="text-[9px] text-zinc-500 mt-1 px-1">Tip: Type @name to mention someone</p>
         </div>
       </div>
     );

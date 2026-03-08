@@ -144,7 +144,6 @@ function parseMessage(text: string, users: { name: string }[]): React.ReactNode[
   let match;
 
   while ((match = regex.exec(text)) !== null) {
-    // Add text before the mention
     if (match.index > lastIndex) {
       parts.push(text.substring(lastIndex, match.index));
     }
@@ -152,7 +151,6 @@ function parseMessage(text: string, users: { name: string }[]): React.ReactNode[
     const mentionedName = match[1];
     const isValidUser = users.some(u => u.name.toLowerCase() === mentionedName.toLowerCase());
 
-    // Add the mention (highlighted if valid user)
     parts.push(
       <span 
         key={match.index} 
@@ -165,7 +163,6 @@ function parseMessage(text: string, users: { name: string }[]): React.ReactNode[
     lastIndex = regex.lastIndex;
   }
 
-  // Add remaining text
   if (lastIndex < text.length) {
     parts.push(text.substring(lastIndex));
   }
@@ -221,13 +218,11 @@ export function CampusesView({
     { id: "campus-study", name: "Campus Study", icon: "📚", color: "indigo", desc: "Focus sessions" },
   ];
   
-  // If in a campus, show the chat
   if (activeCampusId) {
     const campus = campuses.find(c => c.id === activeCampusId);
     
     return (
       <div className="flex flex-col h-full">
-        {/* Campus Header */}
         <div className="h-14 border-b border-white/5 bg-zinc-900/80 backdrop-blur-md flex items-center justify-between px-4 shrink-0">
           <div className="flex items-center gap-2">
             <span className="text-2xl">{campus?.icon}</span>
@@ -244,7 +239,6 @@ export function CampusesView({
           </button>
         </div>
 
-        {/* Messages */}
         <div className="flex-1 overflow-y-auto p-3 space-y-2 pb-safe bg-black">
           {campusMessages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center text-zinc-600">
@@ -288,7 +282,6 @@ export function CampusesView({
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input */}
         <div className="p-3 bg-zinc-900/80 backdrop-blur-md border-t border-white/5 shrink-0 safe-bottom">
           <div className="flex gap-2">
             <input 
@@ -306,7 +299,6 @@ export function CampusesView({
     );
   }
 
-  // Show campus list
   return (
     <div className="h-full overflow-y-auto p-4 pb-8">
       <div className="mb-4">
@@ -366,6 +358,9 @@ interface ProfileViewProps {
   chatTheme: number;
   onThemeChange: (themeId: number) => void;
   isPremiumForTheme: boolean;
+  // 💎 NEW PAYPAL PROPS
+  onUpgradeToPremium: () => void;
+  isUpgrading: boolean;
 }
 
 export function ProfileView({ 
@@ -374,7 +369,8 @@ export function ProfileView({
   gender, major, country, city, university,
   availableCities, availableUniversities, onSave, onCancel,
   profilePic, onProfilePicUpload,
-  chatTheme, onThemeChange, isPremiumForTheme
+  chatTheme, onThemeChange, isPremiumForTheme,
+  onUpgradeToPremium, isUpgrading
 }: ProfileViewProps) {
   const picInputRef = useRef<HTMLInputElement>(null);
 
@@ -504,6 +500,7 @@ export function ProfileView({
           <p className="text-[10px] text-zinc-600 mt-1">Tap 📷 to change photo</p>
         </div>
 
+        {/* 💎 PREMIUM STATUS CARD */}
         <div className={`solid-panel rounded-2xl p-6 ${isPremium ? "border-emerald-500/30" : ""}`}>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-white">Premium Status</h3>
@@ -517,12 +514,14 @@ export function ProfileView({
             <p className="text-xs text-zinc-400">Active until {premiumUntil?.toLocaleDateString()}</p>
           ) : (
             <div>
-              <p className="text-xs text-zinc-400 mb-3">Unlock advanced filters, image uploads & more!</p>
+              <p className="text-xs text-zinc-400 mb-1">Unlock advanced filters, image uploads & more!</p>
+              <p className="text-[10px] text-zinc-500 mb-3">☕ Coffee is $5. This is $3/week. Be smart.</p>
               <button 
-                onClick={() => toast("Stripe checkout coming soon!")}
-                className="btn-emerald w-full rounded-xl py-2 text-sm"
+                onClick={onUpgradeToPremium}
+                disabled={isUpgrading}
+                className="w-full py-3 bg-gradient-to-r from-yellow-400 to-amber-500 text-black font-bold rounded-xl text-sm disabled:opacity-60 disabled:cursor-not-allowed hover:from-yellow-300 hover:to-amber-400 transition-all"
               >
-                Upgrade for $3/week
+                {isUpgrading ? "Redirecting to PayPal..." : "💎 Upgrade — $3/week via PayPal"}
               </button>
             </div>
           )}

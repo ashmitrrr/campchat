@@ -89,6 +89,22 @@ async function loadBans() {
 }
 loadBans();
 
+// ============== PAYPAL HELPERS ==============
+async function getPayPalAccessToken() {
+  const response = await fetch("https://api-m.paypal.com/v1/oauth2/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: "Basic " + Buffer.from(
+        `${process.env.PAYPAL_CLIENT_ID}:${process.env.PAYPAL_CLIENT_SECRET}`
+      ).toString("base64"),
+    },
+    body: "grant_type=client_credentials",
+  });
+  const data = await response.json();
+  return data.access_token;
+}
+
 // 🔥 NEW: CAMPUS MESSAGE HELPERS
 async function saveCampusMessage(campusId, userEmail, userName, profilePic, message, isGif = false) {
   try {
@@ -245,6 +261,79 @@ app.get("/api/gifs/trending", async (req, res) => {
     console.error("GIF trending error:", err);
     res.status(500).json({ error: "Failed to load trending GIFs" });
   }
+});
+
+// ============== PAYPAL ROUTES ==============
+app.post("/api/paypal/create-subscription", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
+
+  const { data: { user }, error } = await supabase.auth.getUser(
+    authHeader.replace("Bearer ", "")
+  );
+  if (error || !user) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const token = await getPayPalAccessToken();
+    const response = await fetch("https://api-m.paypal.com/v1/billing/subscriptions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        plan_id: process.env.PAYPAL_PLAN_ID,
+        application_context: {
+          brand_name: "CampChat",
+          return_url: `${process.env.WEB_ORIGIN}/premium/success`,
+          cancel_url: `${process.env.WEB_ORIGIN}/premium/cancel`,
+        },
+      }),
+    });
+
+    const data = await response.json();
+    const approvalUrl = data.links?.find(l => l.rel === "approve")?.href;
+
+    if (!approvalUrl) {
+      console.error("PayPal error:", data);
+      return res.status(500).json({ error: "Failed to create subscription" });
+    }
+
+    res.json({ approvalUrl, subscriptionId: data.id });
+  } catch (err) {
+    console.error("PayPal create-subscription error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post("/api/paypal/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  const event = JSON.parse(req.body);
+
+  if (event.event_type === "BILLING.SUBSCRIPTION.ACTIVATED") {
+    const subscriptionId = event.resource?.id;
+    const payerEmail = event.resource?.subscriber?.email_address;
+
+    if (payerEmail) {
+      const premiumUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      const { error } = await supabase
+        .from("user_profiles")
+        .update({ 
+          premium_until: premiumUntil,
+          paypal_subscription_id: subscriptionId
+        })
+        .eq("email", payerEmail);
+
+      if (error) {
+        console.error("Failed to update premium status:", error);
+        return res.status(500).json({ error: "DB update failed" });
+      }
+
+      console.log(`💎 Premium activated for ${payerEmail} until ${premiumUntil}`);
+    }
+  }
+
+  res.json({ received: true });
 });
 
 app.post("/api/generate-token", async (req, res) => {

@@ -54,6 +54,7 @@ export default function Home() {
   
   const [isPremium, setIsPremium] = useState(false);
   const [premiumUntil, setPremiumUntil] = useState<Date | null>(null);
+  const [isUpgrading, setIsUpgrading] = useState(false);
   
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   
@@ -445,7 +446,7 @@ export default function Home() {
     // 🔥 CAMPUS SOCKET EVENTS
     s.on("campus_joined", ({ campusId, name, history }) => {
       setActiveCampusId(campusId);
-      setCampusMessages(history || []); // Load history
+      setCampusMessages(history || []);
       setJoinedCampuses(prev => new Set(prev).add(campusId));
       toast.success(`Joined ${name}! 🏕️`);
     });
@@ -457,7 +458,6 @@ export default function Home() {
     s.on("campus_message", (msg) => {
       setCampusMessages(prev => [...prev, msg]);
       
-      // 🔥 Send browser notification if not in focus
       if (notificationPermission === "granted" && document.hidden && msg.email !== user.email) {
         new Notification(`${msg.from} in Campus`, {
           body: msg.isGif ? "Sent a GIF" : msg.text,
@@ -471,7 +471,6 @@ export default function Home() {
       toast.error(message);
     });
 
-    // 🔥 Get user's joined campuses
     s.on("my_campuses", ({ campuses }) => {
       setMyCampuses(campuses);
     });
@@ -578,9 +577,43 @@ export default function Home() {
     setImageTimers(prev => new Map(prev).set(imageUrl, timer));
   };
 
+  // 💎 PAYPAL UPGRADE HANDLER
+  const handleUpgradeToPremium = async () => {
+    if (!user) return;
+    setIsUpgrading(true);
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+
+      const response = await fetch(`${SERVER_URL}/api/paypal/create-subscription`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (data.approvalUrl) {
+        window.location.href = data.approvalUrl;
+      } else {
+        toast.error("Failed to start checkout. Try again.");
+      }
+    } catch (err) {
+      console.error("PayPal upgrade error:", err);
+      toast.error("Something went wrong. Try again.");
+    } finally {
+      setIsUpgrading(false);
+    }
+  };
+
   const showPremiumPaywall = () => {
     toast.error("🔒 Premium Feature - Coffee is $5. This is $3/week. Be smart.", { duration: 3000 });
-    setTimeout(() => { toast("Stripe checkout coming soon!"); }, 1000);
+    setTimeout(() => {
+      setActiveTab("profile");
+    }, 1000);
   };
 
   // 🔥 NEW: CAMPUS HANDLERS
@@ -940,6 +973,8 @@ export default function Home() {
               chatTheme={chatTheme}
               onThemeChange={handleThemeChange}
               isPremiumForTheme={isPremium}
+              onUpgradeToPremium={handleUpgradeToPremium}
+              isUpgrading={isUpgrading}
             />
           )}
         </div>
